@@ -16,8 +16,6 @@ namespace gflib {
         double outMin = -12.0, outMax = 12.0;
     };
 
-    // Aggregate on purpose: reset with `state = PidState{}` at the start of each
-    // motion. Every field must keep a default initializer.
     struct PidState {
         double integral   = 0.0;
         double prevError  = 0.0;
@@ -27,4 +25,5 @@ namespace gflib {
 
     double pidStep(PidState& s, const PidGains& g, double error, double dtSec);
 
+    inline void pidReset(PidState& s) { s = PidState{}; }
 } // namespace gflib
