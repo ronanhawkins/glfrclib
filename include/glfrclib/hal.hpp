@@ -27,4 +27,4 @@ namespace gflib{
             virtual ~IClock() = default;
             virtual uint32_t millisNow() const = 0;
     };
-}
+} //namespace gflib
