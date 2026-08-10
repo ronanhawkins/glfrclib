@@ -1,0 +1,30 @@
+#pragma once
+#include <limits>
+
+namespace gflib {
+
+    struct PidGains {
+        double kP = 0.0, kI = 0.0, kD = 0.0;
+    
+        //
+        double iZone = std::numeric_limits<double>::infinity();
+        double iMax = std::numeric_limits<double>::infinity();
+        double slewPerSec = std::numeric_limits<double>::infinity();
+    
+        // Output limits, so prevOutput can only ever hold a
+        // voltage the motors can actually produce.
+        double outMin = -12.0, outMax = 12.0;
+    };
+
+    // Aggregate on purpose: reset with `state = PidState{}` at the start of each
+    // motion. Every field must keep a default initializer.
+    struct PidState {
+        double integral   = 0.0;
+        double prevError  = 0.0;
+        double prevOutput = 0.0;
+        bool   first      = true;
+    };
+
+    double pidStep(PidState& s, const PidGains& g, double error, double dtSec);
+
+} // namespace gflib
