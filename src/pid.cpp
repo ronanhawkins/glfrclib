@@ -13,9 +13,8 @@ namespace gflib {
         //doesn't act if far away
         else s.integral = 0;
 
-        // Guarded by !s.first: prevError is 0 on the first call and signbit(0)
-        // is false, so an unguarded check fires whenever the first error is
-        // negative.
+        // !s.first guard: prevError is 0 on the first call and signbit(0) is
+        // false, so this would fire whenever the first error is negative
         if (!s.first && std::signbit(error) != std::signbit(s.prevError)){
             s.integral = 0;
         }
