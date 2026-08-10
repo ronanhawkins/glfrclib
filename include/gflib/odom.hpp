@@ -1,5 +1,5 @@
 #pragma once
-#include "glfrclib/pose.hpp"
+#include "gflib/pose.hpp"
 
 namespace gflib {
 

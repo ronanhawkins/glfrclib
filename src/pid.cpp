@@ -1,10 +1,12 @@
-#include "glfrclib/pid.hpp"
-#include "glfrclib/util.hpp"
+#include "gflib/pid.hpp"
+#include "gflib/util.hpp"
 #include <cmath>
 
 namespace gflib {
 
     double pidStep(PidState& s, const PidGains& g, double error, double dtSec){
+        if (!std::isfinite(error)) return s.prevOutput;
+        
         if (dtSec <= 0) return s.prevOutput;
 
         if (std::fabs(error)<g.iZone) s.integral+= error * dtSec;
