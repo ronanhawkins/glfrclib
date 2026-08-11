@@ -1,5 +1,5 @@
 {
-  "name": "glfrclib",
+  "name": "gflib",
   "version": "0.1.0",
   "build": {
     "flags": ["-std=c++17"],
