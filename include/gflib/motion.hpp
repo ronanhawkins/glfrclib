@@ -1,8 +1,8 @@
 #pragma once
 #include <cstdint>
-#include <gflib/pose.hpp>
-#include <gflib/hal.hpp>
-#include <gflib/pid.hpp>
+#include "gflib/pose.hpp"
+#include "gflib/hal.hpp"
+#include "gflib/pid.hpp"
 
 namespace gflib {
 class IMotion{
@@ -12,7 +12,13 @@ class IMotion{
         virtual bool tick(const Pose&, double dtSec, IDriveOutput&, uint32_t nowMs) = 0;
 };
 
-// 3 tier exit conditions
+// 3 tier exit conditions.
+//
+// Zero means something different in every field, so set all five:
+//   smallErr/largeErr = 0  disables that band, a zero-width band is unenterable
+//   smallTimeMs/largeTimeMs = 0  fires the moment you enter the band, which is
+//     the "settled while still moving" bug the hold time exists to prevent
+//   timeoutMs = 0  gives up before the robot moves
 struct ExitConditions {
     double   smallErr;
     uint32_t smallTimeMs;
@@ -39,8 +45,8 @@ class BandTimer {
 
 
 struct ExitState {
-    BandTimer small{};
-    BandTimer large{};
+    BandTimer smallBand{};
+    BandTimer largeBand{};
     uint32_t startMs  = 0;
     bool timedOut = false;
 };
@@ -93,6 +99,18 @@ struct MoveConfig {
     // minSpeed, in volts. 0 disables.
     // Set just above where the drivetrain starts moving
     double minVolts = 0.0;
+
+    // Angular tolerance in degrees, used twice:
+    //   MoveToPose will not report done until the heading is inside it
+    //   the angular floor stops pushing inside it
+    // 0 waives the MoveToPose heading guarantee AND disables angMinVolts,
+    // since a zero cutoff would floor the turn command forever
+    double headingTolDeg = 5.0;
+
+    // Floor on the angular command. minVolts covers driving; without this a
+    // robot with real friction closes the last inches of a move but not the
+    // last few degrees of the course correction. 0 disables
+    double angMinVolts = 0.0;
 
     // MoveToPose only. Carrot sits lead*distance behind the target.
     // 0 ignores the final heading, higher swings wider to hit it.

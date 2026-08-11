@@ -7,7 +7,9 @@ namespace gflib {
 double pidStep(PidState& s, const PidGains& g, double error, double dtSec){
     if (!std::isfinite(error)) return s.prevOutput;
 
-    if (dtSec <= 0) return s.prevOutput;
+    // Negated on purpose: NaN <= 0 is false, so the obvious form lets a NaN
+    // timestep through and poisons integral and deriv permanently
+    if (!(dtSec > 0)) return s.prevOutput;
 
     if (std::fabs(error)<g.iZone) s.integral+= error * dtSec;
     //doesn't act if far away

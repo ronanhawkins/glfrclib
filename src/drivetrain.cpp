@@ -55,19 +55,33 @@ ExitConditions Drivetrain::withTimeout(const ExitConditions& base, uint32_t time
 }
 
 bool Drivetrain::runMotion(IMotion& motion) {
-    cancelled_ = false;
+    // Not cleared here. A cancel raised between motions would otherwise be
+    // wiped by the next one, which is the wrong way for an estop to fail
+    if (cancelled_) {
+        drive_.stop();
+        return false;
+    }
 
     // Pose must be current before the first tick, or the motion starts on
     // whatever the last update left behind
     update();
 
     uint32_t nowMs = clock_.millisNow();
+    uint32_t lastMs = nowMs;
     motion.start(nowMs);
 
     while (!cancelled_) {
         update();
         nowMs = clock_.millisNow();
-        if (motion.tick(pose_, cfg_.loopMs / 1000.0, drive_, nowMs)) break;
+
+        // Measured, not nominal. sleepMs(loopMs) yields for AT LEAST loopMs,
+        // and update() plus two PIDs are not free, so the real period runs
+        // long and jittery on hardware. Feeding the nominal value scales every
+        // derivative, integral and slew step by that error
+        const double dtSec = (nowMs - lastMs) / 1000.0;
+        lastMs = nowMs;
+
+        if (motion.tick(pose_, dtSec, drive_, nowMs)) break;
         clock_.sleepMs(cfg_.loopMs);
     }
 

@@ -8,16 +8,17 @@ bool checkExit(ExitState& s, const ExitConditions& ec, double error, uint32_t no
     const double absErr = std::fabs(error);
 
     // Updated every tick
-    const bool smallDone = s.small.update(absErr, ec.smallErr, ec.smallTimeMs, nowMs);
-    const bool largeDone = s.large.update(absErr, ec.largeErr, ec.largeTimeMs, nowMs);
-    if (smallDone || largeDone) return true;
+    const bool smallDone = s.smallBand.update(absErr, ec.smallErr, ec.smallTimeMs, nowMs);
+    const bool largeDone = s.largeBand.update(absErr, ec.largeErr, ec.largeTimeMs, nowMs);
 
+    // Evaluated even when a band has fired. A caller may DECLINE the exit
+    // (MoveToPose does, until the heading lands), and then the timeout is the
+    // only thing left to end the motion. Returning early here means timedOut
+    // never gets set and such a caller loops forever
     // Unsigned subtraction
-    if (nowMs - s.startMs >= ec.timeoutMs) {
-        s.timedOut = true;
-        return true;
-    }
-    return false;
+    if (nowMs - s.startMs >= ec.timeoutMs) s.timedOut = true;
+
+    return smallDone || largeDone || s.timedOut;
 }
 
 namespace {
@@ -95,13 +96,16 @@ namespace {
 
         double lin = pidStep(linPid, linG, linErr, dtSec);
         double ang = 0.0;
+        double angErrUsed = 0.0;
 
         if (distInches >= cfg.settleRadiusInches) {
-            ang = pidStep(angPid, angG, angErrDeg, dtSec);
+            angErrUsed = angErrDeg;
+            ang = pidStep(angPid, angG, angErrUsed, dtSec);
         } else if (holdHeadingDeg) {
             // Close in, hold the final heading. Same either way, backing
             // in still ends facing the same direction
-            ang = pidStep(angPid, angG, wrapDeg(*holdHeadingDeg - pose.thetaDeg), dtSec);
+            angErrUsed = wrapDeg(*holdHeadingDeg - pose.thetaDeg);
+            ang = pidStep(angPid, angG, angErrUsed, dtSec);
         } else {
             // Bearing is noise here. Reset, not freeze, or re-entering
             // spikes the derivative off a stale prevError
@@ -110,6 +114,12 @@ namespace {
 
         // Magnitude is unsigned distance, sign is the projected error
         lin = applyFloor(lin, linErr, distInches, cfg.minVolts, floorCutoffInches);
+
+        // Same friction floor for steering. Without it a robot with real
+        // friction closes the last inches but not the last few degrees
+        if (cfg.headingTolDeg > 0.0) {
+            ang = applyFloor(ang, angErrUsed, std::fabs(angErrUsed), cfg.angMinVolts, cfg.headingTolDeg);
+        }
 
         // Angular has priority on saturation drop linear speed, not
         // turning authority
@@ -163,8 +173,18 @@ bool MoveToPose::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint3
     const double dist = std::hypot(targetX_ - pose.x, targetY_ - pose.y);
 
     if (checkExit(exit_, ec_, dist, nowMs)) {
-        drive.stop();
-        return true;
+        // Near the coordinate is not done. Without this the motion reports
+        // success pointing anywhere, and competition code that writes
+        // moveToPose(x, y, 90) reasonably expects 90
+        const double headErrDeg = std::fabs(wrapDeg(targetThetaDeg_ - pose.thetaDeg));
+
+        if (exit_.timedOut || cfg_.headingTolDeg <= 0.0 || headErrDeg <= cfg_.headingTolDeg) {
+            drive.stop();
+            return true;
+        }
+        // Otherwise fall through. Inside the settle radius steerToward holds
+        // the final heading, so this turns on the spot until the heading
+        // lands or the timeout gives up
     }
 
     // Carrot sits lead*dist behind the target along the target heading.

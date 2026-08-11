@@ -1,11 +1,11 @@
 #pragma once
 #include <cstdint>
 #include <atomic>
-#include <gflib/hal.hpp>
-#include <gflib/odom.hpp>
-#include <gflib/pid.hpp>
-#include <gflib/motion.hpp>
-#include <gflib/pose.hpp>
+#include "gflib/hal.hpp"
+#include "gflib/odom.hpp"
+#include "gflib/pid.hpp"
+#include "gflib/motion.hpp"
+#include "gflib/pose.hpp"
 
 namespace gflib {
 
@@ -16,9 +16,12 @@ struct DrivetrainConfig {
     PidGains lateral;
     PidGains angular;
 
-    // Defaults used when a motion is called without explicit conditions
-    ExitConditions lateralExit;
-    ExitConditions angularExit;
+    // Defaults used when a motion is called without explicit conditions.
+    // Initialised here because ExitConditions itself has no defaults, so a
+    // plain `DrivetrainConfig c;` would otherwise leave these indeterminate
+    // and hand a motion a garbage timeout
+    ExitConditions lateralExit{1.0, 100, 3.0, 500, 3000};
+    ExitConditions angularExit{1.0, 100, 3.0, 500, 3000};
 
     MoveConfig move;
     TurnConfig turn;
@@ -29,9 +32,12 @@ struct DrivetrainConfig {
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
-// Blocking motions call update() themselves, so autonomous needs nothing
-// else. Driver control has to call update() each loop or the pose goes
-// stale the moment a motion ends
+//
+// Blocking motions call update() themselves at cfg.loopMs, so autonomous is
+// covered. Driver control must call update() itself, and the rate is now a
+// contract nothing enforces: odometry approximates each tick as one arc, so a
+// slow loop degrades heading-dependent error exactly when a driver is making
+// fast direction changes. Call it at 100Hz, and treat 50Hz as the floor
 class Drivetrain {
     public:
         Drivetrain(IEncoder& vert, IEncoder& horiz, IImu& imu, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg);
@@ -65,8 +71,12 @@ class Drivetrain {
         // Runs any motion to completion. The other calls are wrappers
         bool runMotion(IMotion& motion);
 
-        // Safe from another task. Ends the running motion at the next tick
+        // Safe from another task. Ends the running motion at the next tick.
+        // The flag LATCHES: every later motion fails immediately until
+        // clearCancel(), so an estop raised between motions is not swallowed
         void cancelMotion() { cancelled_ = true; }
+        void clearCancel() { cancelled_ = false; }
+        bool isCancelled() const { return cancelled_; }
 
         // Driver control. Volts, clamped to move.maxVolts
         void tank(double leftVolts, double rightVolts);
