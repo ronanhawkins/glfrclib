@@ -1,5 +1,5 @@
 #pragma once
-#include "gflib/pose.hpp"
+#include <gflib/pose.hpp>
 
 namespace gflib {
 

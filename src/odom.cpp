@@ -21,7 +21,7 @@ Pose odomStep(const Pose& prev, double dVertCounts, double dHorizCounts, double 
         // every time the robot drives straight
         localX = dHorizInches;
         localY = dVertInches;
-    } 
+    }
     else {
         // Chord of the arc travelled. A pod at offset d sweeps an extra
         // d * dThetaRad during rotation, which is not motion
