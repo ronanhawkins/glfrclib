@@ -76,8 +76,7 @@ namespace gflib {
             const double dx = aimX - pose.x;
             const double dy = aimY - pose.y;
 
-            // atan2(dx, dy): args transposed vs textbook, frame is +Y CW.
-            // Check: aim at (+10, 0) -> +90 deg, due right
+            // atan2(dx, dy)
             const double bearingDeg = std::atan2(dx, dy) * kRadToDeg;
             double angErrDeg = wrapDeg(bearingDeg - pose.thetaDeg);
 
@@ -123,9 +122,9 @@ namespace gflib {
         }
     }
 
-    MoveToPoint::MoveToPoint(double targetX, double targetY, const PidGains& linGains, const PidGains& angGains, const ExitConditions& exit, const MoveConfig& cfg)
-        : targetX_(targetX), targetY_(targetY),
-          linGains_(linGains), angGains_(angGains), ec_(exit), cfg_(cfg) {}
+    MoveToPoint::MoveToPoint(double targetX, double targetY, const PidGains& linGains, 
+                             const PidGains& angGains, const ExitConditions& exit, const MoveConfig& cfg)
+        : targetX_(targetX), targetY_(targetY), linGains_(linGains), angGains_(angGains), ec_(exit), cfg_(cfg) {}
 
     void MoveToPoint::start(uint32_t nowMs) {
         exitReset(exit_, nowMs);
@@ -142,8 +141,7 @@ namespace gflib {
             return true;
         }
 
-        steerToward(targetX_, targetY_, dist, pose, cfg_,
-                    linPid_, linGains_, angPid_, angGains_, dtSec, drive, ec_.smallErr);
+        steerToward(targetX_, targetY_, dist, pose, cfg_, linPid_, linGains_, angPid_, angGains_, dtSec, drive, ec_.smallErr);
         return false;
     }
 
