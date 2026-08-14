@@ -5,8 +5,15 @@ namespace gflib {
 
 // All robot geometry. Passed in, never hardcoded
 struct OdomConfig {
+    // Rotation of the whole pod pair about the tracking centreThe pods stay 90 degrees apart: "vert"
+    // measures along +podAngleDeg from forward, "horiz" 90 degrees CW of that.
+    // 0 is the usual forward/sideways mounting; 45 is a diamond mounting.
+    // The names stay vert/horiz at any angle -- read them as pod A and pod B
+    double podAngleDeg = 0.0;
+
     // Signed perpendicular distance from tracking centre to each pod, inches.
-    // Signs depend on mounting side
+    // Measured perpendicular to that pod's own direction of travel, so these
+    // rotate with podAngleDeg.
     double vertOffsetInches = 0.0;
     double horizOffsetInches = 0.0;
 

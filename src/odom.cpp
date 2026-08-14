@@ -14,20 +14,33 @@ Pose odomStep(const Pose& prev, double dVertCounts, double dHorizCounts, double 
 
     //convert degrees to radians
     const double dThetaRad = dThetaDeg * kDegToRad;
+
+    const double aRad = cfg.podAngleDeg * kDegToRad;
+    const double sa = std::sin(aRad), ca = std::cos(aRad);
+
+    // vert measures along (sa, ca) in (right, forward); horiz along (ca, -sa)
+    auto toRobotX = [&](double v, double h) { return v * sa + h * ca; };
+    auto toRobotY = [&](double v, double h) { return v * ca - h * sa; };
+
     double localX, localY;
 
     if (std::fabs(dThetaRad) < 1e-9) {
         // Straight line. Without this the formula below divides by zero
         // every time the robot drives straight
-        localX = dHorizInches;
-        localY = dVertInches;
+        localX = toRobotX(dVertInches, dHorizInches);
+        localY = toRobotY(dVertInches, dHorizInches);
     }
     else {
         // Chord of the arc travelled. A pod at offset d sweeps an extra
-        // d * dThetaRad during rotation, which is not motion
+        // d * dThetaRad during rotation, which is not motion.
+        // Each radius component is resolved in its own pod's direction first,
+        // then the pair is rotated into the robot frame. chord is a scalar, so
+        // it commutes with that rotation
         const double chord = 2.0 * std::sin(dThetaRad / 2.0);
-        localX = chord * (dHorizInches / dThetaRad + cfg.horizOffsetInches);
-        localY = chord * (dVertInches / dThetaRad + cfg.vertOffsetInches);
+        const double rVert = dVertInches / dThetaRad + cfg.vertOffsetInches;
+        const double rHoriz = dHorizInches / dThetaRad + cfg.horizOffsetInches;
+        localX = chord * toRobotX(rVert, rHoriz);
+        localY = chord * toRobotY(rVert, rHoriz);
     }
 
     // Rotate into the field frame using the average heading over the tick.
