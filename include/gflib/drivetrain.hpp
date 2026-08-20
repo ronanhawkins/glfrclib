@@ -29,6 +29,14 @@ struct DrivetrainConfig {
     // Motion loop period. 10ms gives the 100Hz odometry the tuning assumes;
     // raising it makes derivatives noisier
     uint32_t loopMs = 10;
+
+    //error bounds per tick
+    //max degrees per tick before rejection, at 100Hz this is 9000degrees/s
+    double maxDThetaDegPerTick = 90.0;
+
+    //max tracking wheel distance per tick
+    //6 inches at 100Hz is 50ft/s
+    double maxTravelInchesPerTick = 6.0;
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
@@ -47,7 +55,8 @@ class Drivetrain {
         // whole boot-time encoder reading as one enormous delta
         void calibrate();
 
-        // One odometry step from the current sensor readings
+        // One odometry step from the current sensor readings.
+        // Readings failing the plausibility bounds are dropped
         void update();
 
         Pose getPose() const { return pose_; }

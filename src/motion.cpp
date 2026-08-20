@@ -5,6 +5,12 @@
 namespace gflib {
 
 bool checkExit(ExitState& s, const ExitConditions& ec, double error, uint32_t nowMs) {
+    // Avoid NaN errors
+    if (!std::isfinite(error)) {
+        s.timedOut = true;
+        return true;
+    }
+
     const double absErr = std::fabs(error);
 
     // Updated every tick

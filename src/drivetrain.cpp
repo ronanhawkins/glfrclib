@@ -7,10 +7,30 @@ namespace gflib {
 Drivetrain::Drivetrain(IEncoder& vert, IEncoder& horiz, IImu& imu, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg)
     : vert_(vert), horiz_(horiz), imu_(imu), drive_(drive), clock_(clock), cfg_(cfg) {}
 
+namespace {
+
+// Never store a non-finite reading
+void seed(double& prev, double reading) {
+    if (std::isfinite(reading)) prev = reading;
+}
+
+// The delta to integrate, or 0 if it is outside bounds. scale puts the limit
+// in inches; the IMU passes 1.0 and works in degrees. limit <= 0 drops the
+// bound, not the finite check.
+double sanify(double& prev, double reading, double scale, double limit) {
+    const double delta = reading - prev;
+    const bool ok = std::isfinite(delta) && (limit <= 0.0 || std::fabs(delta * scale) <= limit);
+
+    seed(prev, reading);
+    return ok ? delta : 0.0;
+}
+
+}
+
 void Drivetrain::calibrate() {
-    prevVertCounts_ = vert_.getCounts();
-    prevHorizCounts_ = horiz_.getCounts();
-    prevHeadingDeg_ = imu_.getHeadingDeg();
+    seed(prevVertCounts_, vert_.getCounts());
+    seed(prevHorizCounts_, horiz_.getCounts());
+    seed(prevHeadingDeg_, imu_.getHeadingDeg());
     calibrated_ = true;
 }
 
@@ -22,20 +42,13 @@ void Drivetrain::update() {
         return;
     }
 
-    const double vertCounts = vert_.getCounts();
-    const double horizCounts = horiz_.getCounts();
-    const double headingDeg = imu_.getHeadingDeg();
+    // Judged per channel: an IMU glitch should not discard a good tick of
+    // encoder travel.
+    const double dVertCounts = sanify(prevVertCounts_, vert_.getCounts(), cfg_.odom.vertInchesPerCount, cfg_.maxTravelInchesPerTick);
+    const double dHorizCounts = sanify(prevHorizCounts_, horiz_.getCounts(), cfg_.odom.horizInchesPerCount, cfg_.maxTravelInchesPerTick);
+    const double dThetaDeg = sanify(prevHeadingDeg_, imu_.getHeadingDeg(), 1.0, cfg_.maxDThetaDegPerTick);
 
-    // No wrapDeg here on purpose. IImu is unwrapped, so this
-    // subtraction is already the true delta. Wrapping would cap a single
-    // tick at 180 degrees and lose the rest
-    const double dThetaDeg = headingDeg - prevHeadingDeg_;
-
-    pose_ = odomStep(pose_, vertCounts - prevVertCounts_, horizCounts - prevHorizCounts_, dThetaDeg, cfg_.odom);
-
-    prevVertCounts_ = vertCounts;
-    prevHorizCounts_ = horizCounts;
-    prevHeadingDeg_ = headingDeg;
+    pose_ = odomStep(pose_, dVertCounts, dHorizCounts, dThetaDeg, cfg_.odom);
 }
 
 void Drivetrain::setPose(double x, double y, double thetaDeg) {
