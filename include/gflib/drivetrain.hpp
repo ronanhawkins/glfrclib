@@ -66,8 +66,11 @@ class Drivetrain {
         bool turnToHeading(double thetaDeg, const ExitConditions& exit);
         bool turnToHeading(double thetaDeg, uint32_t timeoutMs);
 
-        bool moveToPoint(double x, double y, const ExitConditions& exit);
-        bool moveToPoint(double x, double y, uint32_t timeoutMs);
+        // chainRadiusInches > 0 exits that far out WITHOUT stopping, so the
+        // next move starts from speed. The last move of a chain must omit it
+        // or the motors stay powered. Must exceed exit.smallErr
+        bool moveToPoint(double x, double y, const ExitConditions& exit, double chainRadiusInches = 0.0);
+        bool moveToPoint(double x, double y, uint32_t timeoutMs, double chainRadiusInches = 0.0);
 
         bool moveToPose(double x, double y, double thetaDeg, const ExitConditions& exit);
         bool moveToPose(double x, double y, double thetaDeg, uint32_t timeoutMs);
@@ -75,10 +78,11 @@ class Drivetrain {
         // Straight line relative to where the robot is now. Negative
         // reverses. Built on moveToPoint, so the angular controller holds
         // the current heading for you
-        bool driveDistance(double inches, uint32_t timeoutMs);
+        bool driveDistance(double inches, uint32_t timeoutMs, double chainRadiusInches = 0.0);
 
-        // Runs any motion to completion. The other calls are wrappers
-        bool runMotion(IMotion& motion);
+        // Runs any motion to completion. The other calls are wrappers.
+        // Does not stop the drive on EarlyExit
+        MotionStatus runMotion(IMotion& motion);
 
         // Safe from another task. Ends the running motion at the next tick.
         // The flag LATCHES: every later motion fails immediately until
@@ -91,7 +95,7 @@ class Drivetrain {
         void tank(double leftVolts, double rightVolts);
         void arcade(double throttleVolts, double turnVolts);
 
-        void stop() { drive_.stop(); }
+        void stop() { drive_.stop(); chainEntryVolts_ = 0.0; }
 
         DrivetrainConfig& config() { return cfg_; }
         const DrivetrainConfig& config() const { return cfg_; }
@@ -111,6 +115,9 @@ class Drivetrain {
         double prevHorizCounts_ = 0.0;
         double prevHeadingDeg_ = 0.0;
         bool calibrated_ = false;
+
+        // Carried across a chained handoff to seed the next linear PID
+        double chainEntryVolts_ = 0.0;
 
         std::atomic<bool> cancelled_{false};
 };

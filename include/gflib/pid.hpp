@@ -26,4 +26,11 @@ struct PidState {
 double pidStep(PidState& s, const PidGains& g, double error, double dtSec);
 
 inline void pidReset(PidState& s) { s = PidState{}; }
+
+// Seeds the slew limiter, leaving the derivative disarmed. A chained motion
+// starts from a moving robot, and prevOutput = 0 would ramp it up from zero
+inline void pidResetFrom(PidState& s, double output) {
+    s = PidState{};
+    s.prevOutput = output;
+}
 } // namespace gflib

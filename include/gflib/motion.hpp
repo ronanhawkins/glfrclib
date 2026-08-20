@@ -5,11 +5,29 @@
 #include "gflib/pid.hpp"
 
 namespace gflib {
+// Why a motion ended. EarlyExit is the chaining case: the robot is still
+// moving and must NOT be stopped
+enum class MotionStatus {
+    Running,
+    Settled,
+    EarlyExit,
+    TimedOut,
+    Cancelled,
+};
+
 class IMotion{
     public:
         virtual ~IMotion() = default;
         virtual void start(uint32_t nowMs) = 0;
-        virtual bool tick(const Pose&, double dtSec, IDriveOutput&, uint32_t nowMs) = 0;
+        virtual MotionStatus tick(const Pose&, double dtSec, IDriveOutput&, uint32_t nowMs) = 0;
+};
+
+// Per-motion chaining. radiusInches 0 = settle and stop as usual.
+// Must exceed ExitConditions::smallErr or it would race the exit bands
+struct ChainParams {
+    double radiusInches = 0.0;
+    // Linear volts the previous motion was commanding. Set by Drivetrain
+    double entryLinVolts = 0.0;
 };
 
 // 3 tier exit conditions.
@@ -73,7 +91,7 @@ class TurnToHeading : public IMotion {
         TurnToHeading(double targetDeg, const PidGains& gains, const ExitConditions& exit, const TurnConfig& cfg = {});
 
         void start(uint32_t nowMs) override;
-        bool tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) override;
+        MotionStatus tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) override;
 
         bool timedOut() const { return exit_.timedOut; }
 
@@ -112,6 +130,10 @@ struct MoveConfig {
     // last few degrees of the course correction. 0 disables
     double angMinVolts = 0.0;
 
+    // Linear floor while outside the chain radius. Without it the PID has
+    // wound down by the handoff and chaining buys nothing. 0 disables
+    double chainMinVolts = 0.0;
+
     // MoveToPose only. Carrot sits lead*distance behind the target.
     // 0 ignores the final heading, higher swings wider to hit it.
     double lead = 0.6;
@@ -120,18 +142,24 @@ struct MoveConfig {
 // Drives to a coordinate. Final heading is whatever the approach leaves.
 class MoveToPoint : public IMotion {
     public:
-        MoveToPoint(double targetX, double targetY, const PidGains& linGains, const PidGains& angGains, const ExitConditions& exit, const MoveConfig& cfg = {});
+        MoveToPoint(double targetX, double targetY, const PidGains& linGains, const PidGains& angGains, const ExitConditions& exit, const MoveConfig& cfg = {}, const ChainParams& chain = {});
 
         void start(uint32_t nowMs) override;
-        bool tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) override;
+        MotionStatus tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) override;
 
         bool timedOut() const { return exit_.timedOut; }
+
+        // Seeds the next chained motion's slew limiter
+        double lastLinearVolts() const { return lastLin_; }
 
     private:
         double targetX_, targetY_;
         PidGains linGains_, angGains_;
         ExitConditions ec_;
         MoveConfig cfg_;
+        ChainParams chain_;
+        bool chainArmed_ = false;
+        double lastLin_ = 0.0;
         PidState linPid_{}, angPid_{};
         ExitState exit_{};
 };
@@ -146,7 +174,7 @@ class MoveToPose : public IMotion {
                    const ExitConditions& exit, const MoveConfig& cfg = {});
 
         void start(uint32_t nowMs) override;
-        bool tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) override;
+        MotionStatus tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) override;
 
         bool timedOut() const { return exit_.timedOut; }
 

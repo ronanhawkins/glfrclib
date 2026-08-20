@@ -67,12 +67,12 @@ ExitConditions Drivetrain::withTimeout(const ExitConditions& base, uint32_t time
     return ec;
 }
 
-bool Drivetrain::runMotion(IMotion& motion) {
+MotionStatus Drivetrain::runMotion(IMotion& motion) {
     // Not cleared here. A cancel raised between motions would otherwise be
     // wiped by the next one, which is the wrong way for an estop to fail
     if (cancelled_) {
         drive_.stop();
-        return false;
+        return MotionStatus::Cancelled;
     }
 
     // Pose must be current before the first tick, or the motion starts on
@@ -83,6 +83,7 @@ bool Drivetrain::runMotion(IMotion& motion) {
     uint32_t lastMs = nowMs;
     motion.start(nowMs);
 
+    MotionStatus st = MotionStatus::Running;
     while (!cancelled_) {
         update();
         nowMs = clock_.millisNow();
@@ -94,45 +95,63 @@ bool Drivetrain::runMotion(IMotion& motion) {
         const double dtSec = (nowMs - lastMs) / 1000.0;
         lastMs = nowMs;
 
-        if (motion.tick(pose_, dtSec, drive_, nowMs)) break;
+        st = motion.tick(pose_, dtSec, drive_, nowMs);
+        if (st != MotionStatus::Running) break;
         clock_.sleepMs(cfg_.loopMs);
     }
 
-    drive_.stop();
-    return !cancelled_;
+    // Cancel always stops, chaining or not
+    if (cancelled_) {
+        drive_.stop();
+        return MotionStatus::Cancelled;
+    }
+
+    // EarlyExit deliberately leaves the motors running for the next motion
+    if (st != MotionStatus::EarlyExit) drive_.stop();
+    return st;
+}
+
+namespace {
+bool ok(MotionStatus st) {
+    return st == MotionStatus::Settled || st == MotionStatus::EarlyExit;
+}
 }
 
 bool Drivetrain::turnToHeading(double thetaDeg, const ExitConditions& exit) {
     TurnToHeading m(thetaDeg, cfg_.angular, exit, cfg_.turn);
-    const bool finished = runMotion(m);
-    return finished && !m.timedOut();
+    chainEntryVolts_ = 0.0;        // a turn ends stopped
+    return ok(runMotion(m));
 }
 
 bool Drivetrain::turnToHeading(double thetaDeg, uint32_t timeoutMs) {
     return turnToHeading(thetaDeg, withTimeout(cfg_.angularExit, timeoutMs));
 }
 
-bool Drivetrain::moveToPoint(double x, double y, const ExitConditions& exit) {
-    MoveToPoint m(x, y, cfg_.lateral, cfg_.angular, exit, cfg_.move);
-    const bool finished = runMotion(m);
-    return finished && !m.timedOut();
+bool Drivetrain::moveToPoint(double x, double y, const ExitConditions& exit, double chainRadiusInches) {
+    MoveToPoint m(x, y, cfg_.lateral, cfg_.angular, exit, cfg_.move,
+                  ChainParams{chainRadiusInches, chainEntryVolts_});
+    const MotionStatus st = runMotion(m);
+
+    // Only a handoff carries speed forward; anything else left the robot stopped
+    chainEntryVolts_ = (st == MotionStatus::EarlyExit) ? m.lastLinearVolts() : 0.0;
+    return ok(st);
 }
 
-bool Drivetrain::moveToPoint(double x, double y, uint32_t timeoutMs) {
-    return moveToPoint(x, y, withTimeout(cfg_.lateralExit, timeoutMs));
+bool Drivetrain::moveToPoint(double x, double y, uint32_t timeoutMs, double chainRadiusInches) {
+    return moveToPoint(x, y, withTimeout(cfg_.lateralExit, timeoutMs), chainRadiusInches);
 }
 
 bool Drivetrain::moveToPose(double x, double y, double thetaDeg, const ExitConditions& exit) {
     MoveToPose m(x, y, thetaDeg, cfg_.lateral, cfg_.angular, exit, cfg_.move);
-    const bool finished = runMotion(m);
-    return finished && !m.timedOut();
+    chainEntryVolts_ = 0.0;        // never chains, ends stopped
+    return ok(runMotion(m));
 }
 
 bool Drivetrain::moveToPose(double x, double y, double thetaDeg, uint32_t timeoutMs) {
     return moveToPose(x, y, thetaDeg, withTimeout(cfg_.lateralExit, timeoutMs));
 }
 
-bool Drivetrain::driveDistance(double inches, uint32_t timeoutMs) {
+bool Drivetrain::driveDistance(double inches, uint32_t timeoutMs, double chainRadiusInches) {
     update();
 
     // Project a point `inches` along the current heading and drive to it.
@@ -142,7 +161,7 @@ bool Drivetrain::driveDistance(double inches, uint32_t timeoutMs) {
     const double x = pose_.x + std::sin(thRad) * inches;
     const double y = pose_.y + std::cos(thRad) * inches;
 
-    return moveToPoint(x, y, timeoutMs);
+    return moveToPoint(x, y, timeoutMs, chainRadiusInches);
 }
 
 void Drivetrain::tank(double leftVolts, double rightVolts) {

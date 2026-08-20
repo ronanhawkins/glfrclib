@@ -45,13 +45,13 @@ void TurnToHeading::start(uint32_t nowMs) {
     pidReset(pid_);
 }
 
-bool TurnToHeading::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) {
+MotionStatus TurnToHeading::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) {
     // wrapDeg is mandatory
     const double errorDeg = wrapDeg(targetDeg_ - pose.thetaDeg);
 
     if (checkExit(exit_, ec_, errorDeg, nowMs)) {
         drive.stop();
-        return true;
+        return exit_.timedOut ? MotionStatus::TimedOut : MotionStatus::Settled;
     }
 
     // CW+ : positive error means turn clockwise
@@ -61,7 +61,7 @@ bool TurnToHeading::tick(const Pose& pose, double dtSec, IDriveOutput& drive, ui
 
     drive.setLeft(out);
     drive.setRight(-out);
-    return false;
+    return MotionStatus::Running;
 }
 
 namespace {
@@ -72,12 +72,13 @@ namespace {
     // holdHeadingDeg is what to steer to inside the settle radius. nullptr
     // drops steering. MoveToPose passes its final heading, else heading
     // freezes where it crossed the radius
-    void steerToward(double aimX, double aimY, double distInches,
+    // Returns the linear volts commanded, which seeds the next chained motion
+    double steerToward(double aimX, double aimY, double distInches,
                      const Pose& pose, const MoveConfig& cfg,
                      PidState& linPid, const PidGains& linG,
                      PidState& angPid, const PidGains& angG,
                      double dtSec, IDriveOutput& drive,
-                     double floorCutoffInches,
+                     double floorCutoffInches, double chainRadiusInches,
                      const double* holdHeadingDeg = nullptr) {
 
         const double dx = aimX - pose.x;
@@ -118,6 +119,11 @@ namespace {
             pidReset(angPid);
         }
 
+        // Higher floor outside the chain radius, so speed survives the handoff
+        if (chainRadiusInches > 0.0 && cfg.chainMinVolts > 0.0) {
+            lin = applyFloor(lin, linErr, distInches, cfg.chainMinVolts, chainRadiusInches);
+        }
+
         // Magnitude is unsigned distance, sign is the projected error
         lin = applyFloor(lin, linErr, distInches, cfg.minVolts, floorCutoffInches);
 
@@ -135,30 +141,44 @@ namespace {
 
         drive.setLeft(clamp(lin + ang, -cfg.maxVolts, cfg.maxVolts));
         drive.setRight(clamp(lin - ang, -cfg.maxVolts, cfg.maxVolts));
+        return lin;
     }
 }
 
 MoveToPoint::MoveToPoint(double targetX, double targetY, const PidGains& linGains,
-                         const PidGains& angGains, const ExitConditions& exit, const MoveConfig& cfg)
-    : targetX_(targetX), targetY_(targetY), linGains_(linGains), angGains_(angGains), ec_(exit), cfg_(cfg) {}
+                         const PidGains& angGains, const ExitConditions& exit, const MoveConfig& cfg,
+                         const ChainParams& chain)
+    : targetX_(targetX), targetY_(targetY), linGains_(linGains), angGains_(angGains), ec_(exit), cfg_(cfg), chain_(chain) {
+    // A radius inside the settle band would race checkExit. Arm only outside,
+    // so a misconfigured one degrades to a normal settle
+    chainArmed_ = chain_.radiusInches > 0.0 && chain_.radiusInches > ec_.smallErr;
+}
 
 void MoveToPoint::start(uint32_t nowMs) {
     exitReset(exit_, nowMs);
-    pidReset(linPid_);
+    pidResetFrom(linPid_, chain_.entryLinVolts);
     pidReset(angPid_);
+
+    // Pass through, in case we hand off on the first tick. Otherwise a
+    // segment shorter than the radius drops the next motion back to zero
+    lastLin_ = chain_.entryLinVolts;
 }
 
-bool MoveToPoint::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) {
+MotionStatus MoveToPoint::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) {
     const double dist = std::hypot(targetX_ - pose.x, targetY_ - pose.y);
+
+    // Hand off early, still moving. No stop() here, that is the whole point
+    if (chainArmed_ && dist <= chain_.radiusInches) return MotionStatus::EarlyExit;
 
     // Unsigned on purpose: done when near the point, whichever way we face
     if (checkExit(exit_, ec_, dist, nowMs)) {
         drive.stop();
-        return true;
+        return exit_.timedOut ? MotionStatus::TimedOut : MotionStatus::Settled;
     }
 
-    steerToward(targetX_, targetY_, dist, pose, cfg_, linPid_, linGains_, angPid_, angGains_, dtSec, drive, ec_.smallErr);
-    return false;
+    lastLin_ = steerToward(targetX_, targetY_, dist, pose, cfg_, linPid_, linGains_, angPid_, angGains_,
+                           dtSec, drive, ec_.smallErr, chainArmed_ ? chain_.radiusInches : 0.0);
+    return MotionStatus::Running;
 }
 
 MoveToPose::MoveToPose(double targetX, double targetY, double targetThetaDeg,
@@ -175,7 +195,9 @@ void MoveToPose::start(uint32_t nowMs) {
     carrotY_ = targetY_;
 }
 
-bool MoveToPose::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) {
+// No chaining here: the carrot only collapses onto the target as dist -> 0,
+// so an early exit means the final heading has not landed
+MotionStatus MoveToPose::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint32_t nowMs) {
     const double dist = std::hypot(targetX_ - pose.x, targetY_ - pose.y);
 
     if (checkExit(exit_, ec_, dist, nowMs)) {
@@ -186,7 +208,7 @@ bool MoveToPose::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint3
 
         if (exit_.timedOut || cfg_.headingTolDeg <= 0.0 || headErrDeg <= cfg_.headingTolDeg) {
             drive.stop();
-            return true;
+            return exit_.timedOut ? MotionStatus::TimedOut : MotionStatus::Settled;
         }
         // Otherwise fall through. Inside the settle radius steerToward holds
         // the final heading, so this turns on the spot until the heading
@@ -202,7 +224,7 @@ bool MoveToPose::tick(const Pose& pose, double dtSec, IDriveOutput& drive, uint3
 
     steerToward(carrotX_, carrotY_, dist, pose, cfg_,
                 linPid_, linGains_, angPid_, angGains_, dtSec, drive,
-                ec_.smallErr, &targetThetaDeg_);
-    return false;
+                ec_.smallErr, 0.0, &targetThetaDeg_);
+    return MotionStatus::Running;
 }
 }
