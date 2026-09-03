@@ -1,35 +1,36 @@
 #pragma once
+#include "gflib/real.hpp"
 #include <limits>
 
 namespace gflib {
 
 struct PidGains {
-    double kP = 0.0, kI = 0.0, kD = 0.0;
+    real kP = 0.0_r, kI = 0.0_r, kD = 0.0_r;
 
     //Initialized to infinity (0 can cause issues)
-    double iZone = std::numeric_limits<double>::infinity();
-    double iMax = std::numeric_limits<double>::infinity();
-    double slewPerSec = std::numeric_limits<double>::infinity();
+    real iZone = std::numeric_limits<real>::infinity();
+    real iMax = std::numeric_limits<real>::infinity();
+    real slewPerSec = std::numeric_limits<real>::infinity();
 
     // Applied inside pidStep so prevOutput only holds real voltages
-    double outMin = -12.0, outMax = 12.0;
+    real outMin = -12.0_r, outMax = 12.0_r;
 };
 
 // every field needs a default so pidReset works.
 struct PidState {
-    double integral = 0.0;
-    double prevError = 0.0;
-    double prevOutput = 0.0;
+    real integral = 0.0_r;
+    real prevError = 0.0_r;
+    real prevOutput = 0.0_r;
     bool first = true;
 };
 
-double pidStep(PidState& s, const PidGains& g, double error, double dtSec);
+real pidStep(PidState& s, const PidGains& g, real error, real dtSec);
 
 inline void pidReset(PidState& s) { s = PidState{}; }
 
 // Seeds the slew limiter, leaving the derivative disarmed. A chained motion
 // starts from a moving robot, and prevOutput = 0 would ramp it up from zero
-inline void pidResetFrom(PidState& s, double output) {
+inline void pidResetFrom(PidState& s, real output) {
     s = PidState{};
     s.prevOutput = output;
 }

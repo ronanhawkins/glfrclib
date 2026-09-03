@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 
 namespace gflib{
 class IEncoder {
@@ -22,6 +23,25 @@ class IDriveOutput {
         virtual void setLeft(double volts) = 0;
         virtual void setRight(double volts) = 0;
         virtual void stop() {setLeft(0); setRight(0);}
+};
+
+// Raw byte transport, for the RS-485 link. HardwareSerial on the ESP32, a
+// PROS smart-port serial on the V5.
+//
+// Non-blocking both ways. read() returns what is already buffered and 0 is a
+// normal answer, not an error. write() returns what it accepted, which may
+// be short
+class IByteStream {
+    public:
+        virtual ~IByteStream() = default;
+
+        // Up to `cap` bytes into `dst`. Returns how many were read.
+        virtual size_t read(uint8_t* dst, size_t cap) = 0;
+
+        // Returns how many bytes were accepted. A short write means the
+        // frame was truncated on the wire: drop the rest, never send the
+        // tail on the next tick
+        virtual size_t write(const uint8_t* src, size_t len) = 0;
 };
 
 class IClock {

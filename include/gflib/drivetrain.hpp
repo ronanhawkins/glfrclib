@@ -1,4 +1,5 @@
 #pragma once
+#include "gflib/real.hpp"
 #include <cstdint>
 #include <atomic>
 #include "gflib/hal.hpp"
@@ -20,8 +21,8 @@ struct DrivetrainConfig {
     // Initialised here because ExitConditions itself has no defaults, so a
     // plain `DrivetrainConfig c;` would otherwise leave these indeterminate
     // and hand a motion a garbage timeout
-    ExitConditions lateralExit{1.0, 100, 3.0, 500, 3000};
-    ExitConditions angularExit{1.0, 100, 3.0, 500, 3000};
+    ExitConditions lateralExit{1.0_r, 100, 3.0_r, 500, 3000};
+    ExitConditions angularExit{1.0_r, 100, 3.0_r, 500, 3000};
 
     MoveConfig move;
     TurnConfig turn;
@@ -32,11 +33,11 @@ struct DrivetrainConfig {
 
     //error bounds per tick
     //max degrees per tick before rejection, at 100Hz this is 9000degrees/s
-    double maxDThetaDegPerTick = 90.0;
+    real maxDThetaDegPerTick = 90.0_r;
 
     //max tracking wheel distance per tick
     //6 inches at 100Hz is 50ft/s
-    double maxTravelInchesPerTick = 6.0;
+    real maxTravelInchesPerTick = 6.0_r;
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
@@ -60,25 +61,25 @@ class Drivetrain {
         void update();
 
         Pose getPose() const { return pose_; }
-        void setPose(double x, double y, double thetaDeg);
+        void setPose(real x, real y, real thetaDeg);
 
         // Blocking. Each returns false if it gave up on the timeout
-        bool turnToHeading(double thetaDeg, const ExitConditions& exit);
-        bool turnToHeading(double thetaDeg, uint32_t timeoutMs);
+        bool turnToHeading(real thetaDeg, const ExitConditions& exit);
+        bool turnToHeading(real thetaDeg, uint32_t timeoutMs);
 
         // chainRadiusInches > 0 exits that far out WITHOUT stopping, so the
         // next move starts from speed. The last move of a chain must omit it
         // or the motors stay powered. Must exceed exit.smallErr
-        bool moveToPoint(double x, double y, const ExitConditions& exit, double chainRadiusInches = 0.0);
-        bool moveToPoint(double x, double y, uint32_t timeoutMs, double chainRadiusInches = 0.0);
+        bool moveToPoint(real x, real y, const ExitConditions& exit, real chainRadiusInches = 0.0_r);
+        bool moveToPoint(real x, real y, uint32_t timeoutMs, real chainRadiusInches = 0.0_r);
 
-        bool moveToPose(double x, double y, double thetaDeg, const ExitConditions& exit);
-        bool moveToPose(double x, double y, double thetaDeg, uint32_t timeoutMs);
+        bool moveToPose(real x, real y, real thetaDeg, const ExitConditions& exit);
+        bool moveToPose(real x, real y, real thetaDeg, uint32_t timeoutMs);
 
         // Straight line relative to where the robot is now. Negative
         // reverses. Built on moveToPoint, so the angular controller holds
         // the current heading for you
-        bool driveDistance(double inches, uint32_t timeoutMs, double chainRadiusInches = 0.0);
+        bool driveDistance(real inches, uint32_t timeoutMs, real chainRadiusInches = 0.0_r);
 
         // Runs any motion to completion. The other calls are wrappers.
         // Does not stop the drive on EarlyExit
@@ -92,10 +93,10 @@ class Drivetrain {
         bool isCancelled() const { return cancelled_; }
 
         // Driver control. Volts, clamped to move.maxVolts
-        void tank(double leftVolts, double rightVolts);
-        void arcade(double throttleVolts, double turnVolts);
+        void tank(real leftVolts, real rightVolts);
+        void arcade(real throttleVolts, real turnVolts);
 
-        void stop() { drive_.stop(); chainEntryVolts_ = 0.0; }
+        void stop() { drive_.stop(); chainEntryVolts_ = 0.0_r; }
 
         DrivetrainConfig& config() { return cfg_; }
         const DrivetrainConfig& config() const { return cfg_; }
@@ -111,13 +112,14 @@ class Drivetrain {
         DrivetrainConfig cfg_;
 
         Pose pose_{};
+        // double, not real: these accumulate raw encoder counts. See sanify()
         double prevVertCounts_ = 0.0;
         double prevHorizCounts_ = 0.0;
         double prevHeadingDeg_ = 0.0;
         bool calibrated_ = false;
 
         // Carried across a chained handoff to seed the next linear PID
-        double chainEntryVolts_ = 0.0;
+        real chainEntryVolts_ = 0.0_r;
 
         std::atomic<bool> cancelled_{false};
 };

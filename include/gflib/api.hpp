@@ -8,3 +8,5 @@
 #include "gflib/pid.hpp"
 #include "gflib/motion.hpp"
 #include "gflib/drivetrain.hpp"
+#include "gflib/link.hpp"
+#include "gflib/mcl.hpp"

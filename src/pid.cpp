@@ -4,7 +4,7 @@
 
 namespace gflib {
 
-double pidStep(PidState& s, const PidGains& g, double error, double dtSec){
+real pidStep(PidState& s, const PidGains& g, real error, real dtSec){
     if (!std::isfinite(error)) return s.prevOutput;
 
     // Negated on purpose: NaN <= 0 is false, so the obvious form lets a NaN
@@ -23,13 +23,13 @@ double pidStep(PidState& s, const PidGains& g, double error, double dtSec){
 
     s.integral = clamp(s.integral, -g.iMax, g.iMax);
 
-    const double deriv = s.first ? 0.0 : (error - s.prevError) / dtSec;
+    const real deriv = s.first ? 0.0_r : (error - s.prevError) / dtSec;
     s.first = false;
 
-    double out = g.kP * error + g.kI * s.integral + g.kD * deriv;
+    real out = g.kP * error + g.kI * s.integral + g.kD * deriv;
 
     // Slew first, then saturate
-    const double maxDelta = g.slewPerSec * dtSec;
+    const real maxDelta = g.slewPerSec * dtSec;
     out = clamp(out, s.prevOutput - maxDelta, s.prevOutput + maxDelta);
     out = clamp(out, g.outMin, g.outMax);
 

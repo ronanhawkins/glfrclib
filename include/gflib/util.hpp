@@ -1,21 +1,22 @@
 #pragma once
+#include "gflib/real.hpp"
 #include <cmath>
 
 namespace gflib {
 
 // k-prefixed because Arduino.h defines PI/DEG_TO_RAD/RAD_TO_DEG as macros, which ignore namespaces
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kDegToRad = kPi / 180.0;
-constexpr double kRadToDeg = 180.0 / kPi;
+constexpr real kPi = 3.14159265358979323846_r;
+constexpr real kDegToRad = kPi / 180.0_r;
+constexpr real kRadToDeg = 180.0_r / kPi;
 
 // [-180, 180). 180 maps to -180
-inline double wrapDeg(double a) {
-    a = std::fmod(a + 180.0, 360.0);
-    if (a < 0) a += 360.0;
-    return a - 180.0;
+inline real wrapDeg(real a) {
+    a = std::fmod(a + 180.0_r, 360.0_r);
+    if (a < 0) a += 360.0_r;
+    return a - 180.0_r;
 }
 
-inline double clamp(double v, double lo, double hi) {
+inline real clamp(real v, real lo, real hi) {
     return v < lo ? lo : (v > hi ? hi : v);
 }
 

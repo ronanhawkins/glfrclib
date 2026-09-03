@@ -17,12 +17,17 @@ void seed(double& prev, double reading) {
 // The delta to integrate, or 0 if it is outside bounds. scale puts the limit
 // in inches; the IMU passes 1.0 and works in degrees. limit <= 0 drops the
 // bound, not the finite check.
-double sanify(double& prev, double reading, double scale, double limit) {
-    const double delta = reading - prev;
-    const bool ok = std::isfinite(delta) && (limit <= 0.0 || std::fabs(delta * scale) <= limit);
+//
+// The baseline and the reading stay double: encoder counts accumulate, and
+// float holds exact integers only to 2^24. Narrowing happens on the delta,
+// after the subtraction, where the value is one tick of travel.
+real sanify(double& prev, double reading, real scale, real limit) {
+    const real delta = static_cast<real>(reading - prev);
+    const bool ok = std::isfinite(delta) &&
+                    (limit <= 0.0_r || std::fabs(delta * scale) <= limit);
 
     seed(prev, reading);
-    return ok ? delta : 0.0;
+    return ok ? delta : 0.0_r;
 }
 
 }
@@ -44,14 +49,14 @@ void Drivetrain::update() {
 
     // Judged per channel: an IMU glitch should not discard a good tick of
     // encoder travel.
-    const double dVertCounts = sanify(prevVertCounts_, vert_.getCounts(), cfg_.odom.vertInchesPerCount, cfg_.maxTravelInchesPerTick);
-    const double dHorizCounts = sanify(prevHorizCounts_, horiz_.getCounts(), cfg_.odom.horizInchesPerCount, cfg_.maxTravelInchesPerTick);
-    const double dThetaDeg = sanify(prevHeadingDeg_, imu_.getHeadingDeg(), 1.0, cfg_.maxDThetaDegPerTick);
+    const real dVertCounts = sanify(prevVertCounts_, vert_.getCounts(), cfg_.odom.vertInchesPerCount, cfg_.maxTravelInchesPerTick);
+    const real dHorizCounts = sanify(prevHorizCounts_, horiz_.getCounts(), cfg_.odom.horizInchesPerCount, cfg_.maxTravelInchesPerTick);
+    const real dThetaDeg = sanify(prevHeadingDeg_, imu_.getHeadingDeg(), 1.0_r, cfg_.maxDThetaDegPerTick);
 
     pose_ = odomStep(pose_, dVertCounts, dHorizCounts, dThetaDeg, cfg_.odom);
 }
 
-void Drivetrain::setPose(double x, double y, double thetaDeg) {
+void Drivetrain::setPose(real x, real y, real thetaDeg) {
     pose_.x = x;
     pose_.y = y;
     pose_.thetaDeg = thetaDeg;
@@ -92,7 +97,7 @@ MotionStatus Drivetrain::runMotion(IMotion& motion) {
         // and update() plus two PIDs are not free, so the real period runs
         // long and jittery on hardware. Feeding the nominal value scales every
         // derivative, integral and slew step by that error
-        const double dtSec = (nowMs - lastMs) / 1000.0;
+        const real dtSec = (nowMs - lastMs) / 1000.0_r;
         lastMs = nowMs;
 
         st = motion.tick(pose_, dtSec, drive_, nowMs);
@@ -117,60 +122,60 @@ bool ok(MotionStatus st) {
 }
 }
 
-bool Drivetrain::turnToHeading(double thetaDeg, const ExitConditions& exit) {
+bool Drivetrain::turnToHeading(real thetaDeg, const ExitConditions& exit) {
     TurnToHeading m(thetaDeg, cfg_.angular, exit, cfg_.turn);
-    chainEntryVolts_ = 0.0;        // a turn ends stopped
+    chainEntryVolts_ = 0.0_r;        // a turn ends stopped
     return ok(runMotion(m));
 }
 
-bool Drivetrain::turnToHeading(double thetaDeg, uint32_t timeoutMs) {
+bool Drivetrain::turnToHeading(real thetaDeg, uint32_t timeoutMs) {
     return turnToHeading(thetaDeg, withTimeout(cfg_.angularExit, timeoutMs));
 }
 
-bool Drivetrain::moveToPoint(double x, double y, const ExitConditions& exit, double chainRadiusInches) {
+bool Drivetrain::moveToPoint(real x, real y, const ExitConditions& exit, real chainRadiusInches) {
     MoveToPoint m(x, y, cfg_.lateral, cfg_.angular, exit, cfg_.move,
                   ChainParams{chainRadiusInches, chainEntryVolts_});
     const MotionStatus st = runMotion(m);
 
     // Only a handoff carries speed forward; anything else left the robot stopped
-    chainEntryVolts_ = (st == MotionStatus::EarlyExit) ? m.lastLinearVolts() : 0.0;
+    chainEntryVolts_ = (st == MotionStatus::EarlyExit) ? m.lastLinearVolts() : 0.0_r;
     return ok(st);
 }
 
-bool Drivetrain::moveToPoint(double x, double y, uint32_t timeoutMs, double chainRadiusInches) {
+bool Drivetrain::moveToPoint(real x, real y, uint32_t timeoutMs, real chainRadiusInches) {
     return moveToPoint(x, y, withTimeout(cfg_.lateralExit, timeoutMs), chainRadiusInches);
 }
 
-bool Drivetrain::moveToPose(double x, double y, double thetaDeg, const ExitConditions& exit) {
+bool Drivetrain::moveToPose(real x, real y, real thetaDeg, const ExitConditions& exit) {
     MoveToPose m(x, y, thetaDeg, cfg_.lateral, cfg_.angular, exit, cfg_.move);
-    chainEntryVolts_ = 0.0;        // never chains, ends stopped
+    chainEntryVolts_ = 0.0_r;        // never chains, ends stopped
     return ok(runMotion(m));
 }
 
-bool Drivetrain::moveToPose(double x, double y, double thetaDeg, uint32_t timeoutMs) {
+bool Drivetrain::moveToPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
     return moveToPose(x, y, thetaDeg, withTimeout(cfg_.lateralExit, timeoutMs));
 }
 
-bool Drivetrain::driveDistance(double inches, uint32_t timeoutMs, double chainRadiusInches) {
+bool Drivetrain::driveDistance(real inches, uint32_t timeoutMs, real chainRadiusInches) {
     update();
 
     // Project a point `inches` along the current heading and drive to it.
     // forward = (sin t, cos t). Negative distance lands behind us, and
     // MoveConfig::allowReverse then backs into it rather than turning round
-    const double thRad = pose_.thetaDeg * kDegToRad;
-    const double x = pose_.x + std::sin(thRad) * inches;
-    const double y = pose_.y + std::cos(thRad) * inches;
+    const real thRad = pose_.thetaDeg * kDegToRad;
+    const real x = pose_.x + std::sin(thRad) * inches;
+    const real y = pose_.y + std::cos(thRad) * inches;
 
     return moveToPoint(x, y, timeoutMs, chainRadiusInches);
 }
 
-void Drivetrain::tank(double leftVolts, double rightVolts) {
-    const double lim = cfg_.move.maxVolts;
-    drive_.setLeft(clamp(leftVolts, -lim, lim));
-    drive_.setRight(clamp(rightVolts, -lim, lim));
+void Drivetrain::tank(real leftVolts, real rightVolts) {
+    const real lim = cfg_.move.maxVolts;
+    drive_.setLeft(static_cast<double>(clamp(leftVolts, -lim, lim)));
+    drive_.setRight(static_cast<double>(clamp(rightVolts, -lim, lim)));
 }
 
-void Drivetrain::arcade(double throttleVolts, double turnVolts) {
+void Drivetrain::arcade(real throttleVolts, real turnVolts) {
     tank(throttleVolts + turnVolts, throttleVolts - turnVolts);
 }
 

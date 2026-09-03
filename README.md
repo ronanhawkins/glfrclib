@@ -17,10 +17,25 @@ Get these wrong and nothing above them works.
 | Heading direction | **clockwise positive** |
 | Voltage | -12.0 .. +12.0 |
 | Time | milliseconds |
+| Scalar | `gflib::real` — `float` by default |
 
 0° faces +Y, 90° faces +X. Same frame as LemLib, so waypoints carry across.
 
 **Headings are unwrapped.** A robot that has spun twice reads 720, not 0.
+
+**The library computes in `float`.** The ESP32-S3's FPU is single-precision
+only, so a `double` here runs in software while the FPU idles. Build with
+`-D GFLIB_DOUBLE_PRECISION` to switch the whole library to `double`; the test
+suite runs both ways (`pio test -e native`, `pio test -e native_double`).
+
+Over a full 105-second match this costs about 0.01" of position and 0.1° of
+heading against the double build — an order of magnitude under V5 inertial
+drift, and far under wheel slip.
+
+**The HAL stays `double`.** `IEncoder::getCounts()` accumulates without
+bound and `float` holds exact integers only to 2²⁴, so the four classes you
+write below are unaffected by any of this. Deltas are narrowed after the
+subtraction.
 
 ---
 
