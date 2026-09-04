@@ -69,7 +69,9 @@ MotionStatus Drivetrain::runMotion(IMotion& motion) {
         const real dtSec = (nowMs - lastMs) / 1000.0_r;
         lastMs = nowMs;
 
-        st = motion.tick(source_.getPose(), dtSec, drive_, nowMs);
+        // Identity while poseMaxExtrapMs is 0, which is the default and the
+        // only setting the existing tuning has ever seen
+        st = motion.tick(getPoseExtrapolated(nowMs), dtSec, drive_, nowMs);
         if (st != MotionStatus::Running) break;
         clock_.sleepMs(cfg_.loopMs);
     }
@@ -131,7 +133,7 @@ bool Drivetrain::driveDistance(real inches, uint32_t timeoutMs, real chainRadius
     // Project a point `inches` along the current heading and drive to it.
     // forward = (sin t, cos t). Negative distance lands behind us, and
     // MoveConfig::allowReverse then backs into it rather than turning round
-    const Pose p = source_.getPose();
+    const Pose p = getPoseExtrapolated(clock_.millisNow());
     const real thRad = p.thetaDeg * kDegToRad;
     const real x = p.x + std::sin(thRad) * inches;
     const real y = p.y + std::cos(thRad) * inches;

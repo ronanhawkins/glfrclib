@@ -34,6 +34,14 @@ struct DrivetrainConfig {
     // Motion loop period. 10ms gives the 100Hz odometry the tuning assumes;
     // raising it makes derivatives noisier
     uint32_t loopMs = 10;
+
+    // Latency compensation, OFF by default. 0 means every motion sees the
+    // pose exactly as the source reports it
+    //
+    // Set poseMaxExtrapMs only once poseTransitLatencyMs has been MEASURED on
+    // the bench for your link
+    uint32_t poseTransitLatencyMs = 0;
+    uint32_t poseMaxExtrapMs = 0;
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
@@ -66,6 +74,14 @@ class Drivetrain {
         void update() { source_.update(); }
 
         Pose getPose() const { return source_.getPose(); }
+
+        // What the motions actually steer on: getPose(), projected forward by
+        // the configured latency. Identical to getPose() unless
+        // poseMaxExtrapMs is set, so it is also what an opcontrol display
+        // should read if you want to see what the controller sees
+        Pose getPoseExtrapolated(uint32_t nowMs) const {
+            return extrapolatePose(source_, nowMs, cfg_.poseTransitLatencyMs, cfg_.poseMaxExtrapMs);
+        }
 
         // Smoothed, field frame
         Velocity getVelocity() const { return source_.getVelocity(); }

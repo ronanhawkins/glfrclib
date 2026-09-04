@@ -33,8 +33,9 @@ class IPoseSource {
         virtual void update() = 0;
 
         // Bring the source to a usable state, blocking up to timeoutMs.
-        // Odometry seeds its baselines and returns at once; the link waits
-        // for the first healthy frame. Returns false if it gave up.
+        // Returns false if it gave up.
+        //
+        // "Usable" means the source is DELIVERING estimates
         virtual bool begin(uint32_t timeoutMs) = 0;
 
         virtual Pose getPose() const = 0;
@@ -239,13 +240,21 @@ class LinkPoseSource : public IPoseSource {
         uint32_t poseSetSentMs_ = 0;
 };
 
-// Opt-in latency compensationss the field. On
-// OdomPoseSource ageMs() is 0, so this is the identity
-inline Pose extrapolatePose(const IPoseSource& src, uint32_t nowMs, uint32_t maxExtrapMs) {
+// Latency compensation. Projects a pose forward along the velocity
+inline Pose extrapolatePose(const IPoseSource& src, uint32_t nowMs,
+                            uint32_t transitLatencyMs, uint32_t maxExtrapMs) {
     Pose p = src.getPose();
+    if (maxExtrapMs == 0) return p;
 
-    const uint32_t ageMs = src.ageMs(nowMs);
-    const uint32_t useMs = ageMs < maxExtrapMs ? ageMs : maxExtrapMs;
+    const uint32_t dwellMs = src.ageMs(nowMs);
+
+    // Saturating: a source reporting UINT32_MAX for "no report at all" must
+    // not wrap this to something small and plausible
+    const uint32_t totalMs = (dwellMs > UINT32_MAX - transitLatencyMs)
+                                 ? UINT32_MAX
+                                 : dwellMs + transitLatencyMs;
+
+    const uint32_t useMs = totalMs < maxExtrapMs ? totalMs : maxExtrapMs;
     if (useMs == 0) return p;
 
     const Velocity v = src.getVelocity();
