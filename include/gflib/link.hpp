@@ -33,6 +33,9 @@ inline constexpr uint8_t kLinkVersion = 2;
 inline constexpr size_t kLinkHeaderBytes = 6;
 inline constexpr size_t kLinkCrcBytes    = 2;
 inline constexpr size_t kLinkMaxPayload  = 64;
+// Both ends must agree exactly
+inline constexpr uint32_t kLinkBaud = 230400;
+
 inline constexpr size_t kLinkMaxFrame    = kLinkHeaderBytes + kLinkMaxPayload + kLinkCrcBytes;
 
 // messages
@@ -47,6 +50,8 @@ enum class MsgType : uint8_t {
 // the last one of these that arrived, and age it against their own clock.
 struct PoseReport {
     // ESP32 millis at the moment the pose was computed, not at transmit.
+    //
+    // The SENDER's clock.
     uint32_t timestampMs = 0;
 
     // Field frame, inches, origin at field centre. Compass: 0 = +Y, CW+.
@@ -176,6 +181,9 @@ struct LinkStats {
     //
     // Assumes ONE counter per direction, shared by every message type
     uint32_t droppedFrames = 0;
+
+    // Sequence going backwards, or forwards by more than half the counter.
+    uint32_t outOfOrderFrames = 0;
 };
 
 // Byte-stream framer. One per direction, per link. Not thread safe: push() and poll() must be the same task.
@@ -197,7 +205,7 @@ class FrameParser {
 
         const LinkStats& stats() const { return stats_; }
 
-        // Bytes waiting to be parsed. Persistently near kLinkMaxFrame * 2
+        // Bytes waiting to be parsed. Persistently near kLinkMaxFrame * 4
         // means poll() is not keeping up.
         size_t buffered() const { return len_ - pending_; }
 
@@ -255,14 +263,16 @@ bool decodePoseSet(const DecodeResult& r, PoseSet&     out);
 // Bitwise, so there is no 512-byte table sitting in flash for 22-byte frames.
 uint16_t linkCrc16(const uint8_t* data, size_t len);
 
-// Wrap-safe. IClock is 32-bit millis and wraps every ~49.7 days; unsigned
+// BOTH ARGUMENTS MUST COME FROM THE SAME CLOCK. Named "elapsed"
+// To age a frame: record millis when it arrives and pass that.
+// Wrap-safe. Millis is 32-bit and wraps every ~49.7 days; unsigned
 // subtraction is correct through the wrap, a signed one is not.
-inline uint32_t linkAgeMs(uint32_t nowMs, uint32_t stampMs) {
-    return nowMs - stampMs;
+inline uint32_t linkElapsedMs(uint32_t nowMs, uint32_t earlierMs) {
+    return nowMs - earlierMs;
 }
 
-inline bool linkIsStale(uint32_t nowMs, uint32_t stampMs, uint32_t maxAgeMs) {
-    return linkAgeMs(nowMs, stampMs) > maxAgeMs;
+inline bool linkIsStale(uint32_t nowMs, uint32_t earlierMs, uint32_t maxAgeMs) {
+    return linkElapsedMs(nowMs, earlierMs) > maxAgeMs;
 }
 
 // Convenience: fills a Pose from a report. The link carries float; the

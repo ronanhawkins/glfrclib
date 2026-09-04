@@ -261,124 +261,126 @@ bool FrameParser::poll(DecodeResult& out) {
     // Retire the frame the previous poll() handed out.
     retirePending();
 
-    for (;;) {
-        // Hunt for sync. Anything before it is noise, a half-frame mid-stream, or the tail of a frame we already rejected.
-        size_t start = 0;
-        while (start + 1 < len_ &&
-               !(buf_[start] == kLinkSync0 && buf_[start + 1] == kLinkSync1)) {
-            ++start;
-        }
+    // Hunt for sync. Anything before it is noise, a half-frame mid-stream, or the tail of a frame we already rejected.
+    size_t start = 0;
+    while (start + 1 < len_ &&
+           !(buf_[start] == kLinkSync0 && buf_[start + 1] == kLinkSync1)) {
+        ++start;
+    }
 
-        if (start > 0) {
-            stats_.resyncBytes += static_cast<uint32_t>(start);
-            len_ -= start;
-            std::memmove(buf_, buf_ + start, len_);
-        }
+    if (start > 0) {
+        stats_.resyncBytes += static_cast<uint32_t>(start);
+        len_ -= start;
+        std::memmove(buf_, buf_ + start, len_);
+    }
 
-        // A lone trailing 0xA5 might be the first half of a real frame, so keep it and wait for its partner.
-        if (len_ < 2) {
-            out.err = LinkError::Incomplete;
-            return false;
-        }
+    // A lone trailing 0xA5 might be the first half of a real frame, so keep it and wait for its partner.
+    if (len_ < 2) {
+        out.err = LinkError::Incomplete;
+        return false;
+    }
 
-        if (len_ < kLinkHeaderBytes) {
-            out.err = LinkError::Incomplete;
-            return false;
-        }
+    if (len_ < kLinkHeaderBytes) {
+        out.err = LinkError::Incomplete;
+        return false;
+    }
 
-        const uint8_t version = buf_[2];
-        const uint8_t type    = buf_[3];
-        const uint8_t payLen  = buf_[4];
-        const uint8_t seq     = buf_[5];
+    const uint8_t version = buf_[2];
+    const uint8_t type    = buf_[3];
+    const uint8_t payLen  = buf_[4];
+    const uint8_t seq     = buf_[5];
 
-        // Length is checked before we wait on it: an impossible length would
-        // otherwise park the parser waiting for bytes that are not coming.
-        if (payLen > kLinkMaxPayload) {
-            ++stats_.lengthErrors;
-            ++stats_.resyncBytes;
-            len_ -= 1;
-            std::memmove(buf_, buf_ + 1, len_);
-            out.err = LinkError::BadLength;
-            out.version = version;
-            return true;
-        }
-
-        const size_t total = kLinkHeaderBytes + payLen + kLinkCrcBytes;
-        if (len_ < total) {
-            out.err = LinkError::Incomplete;
-            return false;
-        }
-
-        size_t ci = kLinkHeaderBytes + payLen;
-        const uint16_t got = getU16(buf_, ci);
-        const uint16_t want = linkCrc16(buf_, kLinkHeaderBytes + payLen);
-
-        if (got != want) {
-            // Do not consume the whole frame. If this was a false sync, the
-            // real frame may start inside these bytes. Step one byte and rehunt.
-            ++stats_.crcErrors;
-            ++stats_.resyncBytes;
-            len_ -= 1;
-            std::memmove(buf_, buf_ + 1, len_);
-            out.err = LinkError::BadCrc;
-            out.version = version;
-            return true;
-        }
-
-        // CRC-valid from here on, so the header is trustworthy and the frame
-        // can be consumed whole
-        auto consume = [&]() {
-            len_ -= total;
-            std::memmove(buf_, buf_ + total, len_);
-        };
-
-        out.version    = version;
-        out.seq        = seq;
-        out.payloadLen = payLen;
-
-        // Version before payload. A version we do not know may lay its bytes
-        // out any way it likes; reading them as ours is parsing garbage.
-        if (version != kLinkVersion) {
-            ++stats_.versionMismatches;
-            consume();
-            out.err = LinkError::VersionMismatch;
-            return true;
-        }
-
-        // Sequence gaps are counted on frames we accept as ours, so link
-        // noise shows up as crcErrors and genuinely lost frames as drops.
-        if (haveSeq_) {
-            const uint8_t expected = static_cast<uint8_t>(lastSeq_ + 1);
-            if (seq != expected) {
-                stats_.droppedFrames += static_cast<uint8_t>(seq - expected);
-            }
-        }
-        lastSeq_ = seq;
-        haveSeq_ = true;
-
-        switch (static_cast<MsgType>(type)) {
-            case MsgType::PoseReport:
-            case MsgType::BrainStatus:
-            case MsgType::PoseSet:
-                break;
-            default:
-                // Same version, unknown type
-                ++stats_.unknownTypes;
-                consume();
-                out.err = LinkError::UnknownType;
-                return true;
-        }
-
-        out.type = static_cast<MsgType>(type);
-        out.err  = LinkError::None;
-
-        // Payload points into buf_, so compacting here would invalidate it.
-        // The compaction happens on the next poll() instead.
-        out.payload = buf_ + kLinkHeaderBytes;
-        pending_ = total;
-        ++stats_.framesDecoded;
+    // Length is checked before we wait on it: an impossible length would
+    // otherwise park the parser waiting for bytes that are not coming.
+    if (payLen > kLinkMaxPayload) {
+        ++stats_.lengthErrors;
+        ++stats_.resyncBytes;
+        len_ -= 1;
+        std::memmove(buf_, buf_ + 1, len_);
+        out.err = LinkError::BadLength;
+        out.version = version;
         return true;
     }
+
+    const size_t total = kLinkHeaderBytes + payLen + kLinkCrcBytes;
+    if (len_ < total) {
+        out.err = LinkError::Incomplete;
+        return false;
+    }
+
+    size_t ci = kLinkHeaderBytes + payLen;
+    const uint16_t got = getU16(buf_, ci);
+    const uint16_t want = linkCrc16(buf_, kLinkHeaderBytes + payLen);
+
+    if (got != want) {
+        // Do not consume the whole frame. If this was a false sync, the
+        // real frame may start inside these bytes. Step one byte and rehunt.
+        ++stats_.crcErrors;
+        ++stats_.resyncBytes;
+        len_ -= 1;
+        std::memmove(buf_, buf_ + 1, len_);
+        out.err = LinkError::BadCrc;
+        out.version = version;
+        return true;
+    }
+
+    // CRC-valid from here on, so the header is trustworthy and the frame
+    // can be consumed whole
+    auto consume = [&]() {
+        len_ -= total;
+        std::memmove(buf_, buf_ + total, len_);
+    };
+
+    out.version    = version;
+    out.seq        = seq;
+    out.payloadLen = payLen;
+
+    // Version before payload. A version we do not know may lay its bytes
+    // out any way it likes; reading them as ours is parsing garbage.
+    if (version != kLinkVersion) {
+        ++stats_.versionMismatches;
+        consume();
+        out.err = LinkError::VersionMismatch;
+        return true;
+    }
+
+    // Sequence gaps are counted on frames we accept as ours, so link
+    // noise shows up as crcErrors and genuinely lost frames as drops.
+    if (haveSeq_) {
+        const uint8_t expected = static_cast<uint8_t>(lastSeq_ + 1);
+        const uint8_t gap = static_cast<uint8_t>(seq - expected);
+        // Over half the counter range is a frame arriving twice or out of
+        // order, not 200 lost ones -- a duplicate reads as a gap of 255
+        // and would wreck the statistic just when a real fault made you
+        // look at it. UARTs do not reorder, so this is belt and braces.
+        if (gap > 0 && gap < 128) stats_.droppedFrames += gap;
+        else if (gap >= 128)      ++stats_.outOfOrderFrames;
+    }
+    lastSeq_ = seq;
+    haveSeq_ = true;
+
+    switch (static_cast<MsgType>(type)) {
+        case MsgType::PoseReport:
+        case MsgType::BrainStatus:
+        case MsgType::PoseSet:
+            break;
+        default:
+            // Same version, unknown type
+            ++stats_.unknownTypes;
+            consume();
+            out.err = LinkError::UnknownType;
+            return true;
+    }
+
+    out.type = static_cast<MsgType>(type);
+    out.err  = LinkError::None;
+
+    // Payload points into buf_, so compacting here would invalidate it.
+    // The compaction happens on the next poll() instead.
+    out.payload = buf_ + kLinkHeaderBytes;
+    pending_ = total;
+    ++stats_.framesDecoded;
+    return true;
 }
 
 } // namespace gflib
