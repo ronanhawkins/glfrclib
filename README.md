@@ -143,7 +143,7 @@ gflib::Drivetrain chassis(pose, drive, clock, makeConfig());
 
 void initialize() {
     imu.calibrate();        // robot must be still
-    chassis.calibrate();    // seeds the encoder baselines
+    chassis.begin(0);       // seeds the encoder baselines; nothing to wait for
 }
 ```
 
@@ -155,15 +155,21 @@ gflib::LinkPoseSource pose(serial, clock);
 gflib::Drivetrain chassis(pose, drive, clock, makeConfig());
 
 void initialize() {
-    if (!pose.begin(2000)) { /* the far end is not talking */ }
+    // Waits for frames to start flowing, NOT for the cloud to converge --
+    // the far end cannot converge until the PoseSet below tells it where
+    // the robot is
+    if (!chassis.begin(2000)) { /* the far end is not talking: do not drive */ }
+    chassis.setPose(startX, startY, startThetaDeg);
 }
 ```
 
 Everything above `IPoseSource` is identical either way, and `makeConfig()` is
 the same struct on both robots.
 
-`chassis.calibrate()` is not optional on the sensor path. Without it the first
-`update()` reads the whole boot-time encoder value as one enormous delta.
+`chassis.begin()` is not optional on the sensor path. Without it the first
+`update()` reads the whole boot-time encoder value as one enormous delta. It
+returns a `bool` worth checking on the link path, where a link that never comes
+up is a match that must not drive.
 
 `Drivetrain` is **not thread safe** — keep `update()` and all motion calls on
 one task.
