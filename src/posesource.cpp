@@ -171,7 +171,10 @@ bool LinkPoseSource::begin(uint32_t timeoutMs) {
         if (haveReport_) bootIdChanged_ = false;
 
         const uint32_t nowMs = clock_.millisNow();
-        if (healthy(nowMs)) return true;
+
+        // linked(), not healthy(): see the header. Confidence is a per-tick
+        // concern and runMotion's guard already owns it
+        if (linked(nowMs)) return true;
         if (linkElapsedMs(nowMs, startMs) >= timeoutMs) return false;
         clock_.sleepMs(1);
     }
@@ -228,11 +231,25 @@ uint32_t LinkPoseSource::ageMs(uint32_t nowMs) const {
     return linkElapsedMs(nowMs, arrivalMs_);
 }
 
+bool LinkPoseSource::linked(uint32_t nowMs) const {
+    return haveReport_ && ageMs(nowMs) <= cfg_.maxAgeMs;
+}
+
 bool LinkPoseSource::healthy(uint32_t nowMs) const {
-    if (!haveReport_) return false;
+    if (!linked(nowMs)) return false;
     if (bootIdChanged_) return false;
-    if (ageMs(nowMs) > cfg_.maxAgeMs) return false;
     return confidence() >= cfg_.minConfidence;
+}
+
+bool LinkPoseSource::sendStatus(const BrainStatus& status) {
+    uint8_t frame[kLinkMaxFrame];
+    const size_t n = writer_.brainStatus(status, frame, sizeof(frame));
+    if (n == 0) return false;
+
+    // The writer's sequence counter is shared across every message type on
+    // this direction, so status and PoseSet interleave on one counter and
+    // the far end sees no gap
+    return io_.write(frame, n) == n;
 }
 
 } // namespace gflib

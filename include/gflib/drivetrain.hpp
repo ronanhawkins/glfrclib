@@ -52,12 +52,15 @@ class Drivetrain {
         Drivetrain(IPoseSource& source, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg);
 
         // Brings the pose source up. Call once, with the robot still, before
-        // anything else. On odometry this seeds the sensor baselines; on a
-        // link it waits for the first healthy frame
-        bool begin(uint32_t timeoutMs = 0) { return source_.begin(timeoutMs); }
-
-        // Kept for the sensor case, where there is nothing to wait for
-        void calibrate() { source_.begin(0); }
+        // anything else. On odometry this seeds the sensor baselines and
+        // returns at once; on a link it waits for frames to start flowing.
+        //
+        // No default timeout, and the result is worth checking: a link that
+        // never comes up is a match that must not drive. There is
+        // deliberately no calibrate() wrapper -- one that swallowed this
+        // bool would be a silent no-op on the Brain, which is the exact trap
+        // the split exists to remove
+        bool begin(uint32_t timeoutMs) { return source_.begin(timeoutMs); }
 
         // One tick of the pose source
         void update() { source_.update(); }

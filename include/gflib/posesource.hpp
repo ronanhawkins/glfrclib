@@ -153,9 +153,23 @@ class LinkPoseSource : public IPoseSource {
         // running on whatever arrived last
         void update() override;
 
-        // Pumps update() until a healthy report has arrived, or timeoutMs
-        // expires. Accepts whatever bootId that first report carries
+        // Pumps update() until frames are flowing, or timeoutMs expires.
+        // Accepts whatever bootId that first report carries.
+        //
+        // Gates on linked(), NOT on healthy(). The auton sequence is
+        // begin() -> setPose(start) -> drive, and the far end's cloud has no
+        // reason to have converged before it has been told where the robot
+        // is. Waiting on confidence here would block on something that only
+        // arrives after the PoseSet that begin() is holding up, and the
+        // failure mode is auton never running at all
         bool begin(uint32_t timeoutMs) override;
+
+        // Frames are arriving and the last one is recent. The link works;
+        // it says nothing about whether the pose on it is trustworthy.
+        //
+        // This is the transport question. healthy() is the pose question,
+        // and runMotion asks that one every tick
+        bool linked(uint32_t nowMs) const;
 
         Pose getPose() const override;
         Velocity getVelocity() const override;
@@ -180,6 +194,19 @@ class LinkPoseSource : public IPoseSource {
         // flags. Meaningless until the first update() lands one
         const PoseReport& lastReport() const { return last_; }
         bool haveReport() const { return haveReport_; }
+
+        // V5 -> ESP32, alongside the pose stream. This side owns the only
+        // writer and transport, so nothing else can send one.
+        //
+        // The far end needs it to weight its MCL: a ToF return taken while
+        // the robot is parked and one taken while it is being slammed
+        // sideways at full throttle are not the same measurement. Without
+        // this it trusts them equally.
+        //
+        // Returns false on a short write, which means the frame was
+        // truncated on the wire. Status is sent fresh every tick, so drop it
+        // rather than sending the tail next time
+        bool sendStatus(const BrainStatus& status);
 
         const LinkStats& stats() const { return parser_.stats(); }
 
@@ -211,5 +238,26 @@ class LinkPoseSource : public IPoseSource {
         bool poseSetPending_ = false;
         uint32_t poseSetSentMs_ = 0;
 };
+
+// Opt-in latency compensationss the field. On
+// OdomPoseSource ageMs() is 0, so this is the identity
+inline Pose extrapolatePose(const IPoseSource& src, uint32_t nowMs, uint32_t maxExtrapMs) {
+    Pose p = src.getPose();
+
+    const uint32_t ageMs = src.ageMs(nowMs);
+    const uint32_t useMs = ageMs < maxExtrapMs ? ageMs : maxExtrapMs;
+    if (useMs == 0) return p;
+
+    const Velocity v = src.getVelocity();
+    const real dtSec = static_cast<real>(useMs) / 1000.0_r;
+
+    p.x += v.vx * dtSec;
+    p.y += v.vy * dtSec;
+
+    // Unwrapped, like everything else in this frame. Wrapping here would put
+    // a 360 jump into a pose a PID is differencing
+    p.thetaDeg += v.omegaDegPerSec * dtSec;
+    return p;
+}
 
 } // namespace gflib
