@@ -133,9 +133,16 @@ class Mcl {
         // Kish effective sample size. Diagnostic and resample trigger.
         real effectiveSampleSize() const;
 
+        // Re-scatter around `pose` and clear diverged().
+        void reseed(const Pose& pose, real posSigmaInches, real headingSigmaDeg);
+
         // Set when a measurement update found every particle impossible and
         // the weights had to be flattened
         bool diverged() const { return diverged_; }
+
+        // How many times the filter has latched diverged() since init().
+        // Monotonic, so a reseed does not erase
+        uint32_t divergences() const { return divergences_; }
 
         int particleCount() const { return count_; }
         const Particle* particles() const { return p_; }
@@ -155,6 +162,7 @@ class Mcl {
         int       count_ = 0;
         Rng       rng_{};
         bool      diverged_ = false;
+        uint32_t  divergences_ = 0;
         bool      initialised_ = false;
 };
 

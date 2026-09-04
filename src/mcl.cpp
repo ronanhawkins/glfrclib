@@ -82,6 +82,21 @@ void Mcl::init(const MclConfig& cfg, const Pose& seed,
     initialised_ = true;
 }
 
+// Deliberately does NOT reseed the RNG
+void Mcl::reseed(const Pose& pose, real posSigmaInches, real headingSigmaDeg) {
+    if (!initialised_) return;
+
+    const real w = 1.0_r / count_;
+    for (int i = 0; i < count_; ++i) {
+        p_[i].xInches  = pose.x + rng_.nextGaussian() * posSigmaInches;
+        p_[i].yInches  = pose.y + rng_.nextGaussian() * posSigmaInches;
+        p_[i].thetaDeg = pose.thetaDeg + rng_.nextGaussian() * headingSigmaDeg;
+        p_[i].weight   = w;
+    }
+
+    diverged_ = false;
+}
+
 void Mcl::predict(real dVertCounts, real dHorizCounts, real dThetaDeg,
                   const OdomConfig& odom) {
     if (!initialised_) return;
@@ -209,6 +224,7 @@ void Mcl::normalise() {
         // Every particle is impossible. Flatten and latch, fresh init to fix
         const real w = 1.0_r / count_;
         for (int i = 0; i < count_; ++i) p_[i].weight = w;
+        if (!diverged_) ++divergences_;      // count episodes, not updates
         diverged_ = true;
         return;
     }
