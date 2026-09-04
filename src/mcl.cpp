@@ -174,22 +174,66 @@ void Mcl::update(const SensorMount* mounts, size_t mountCount,
     const real sigma = cfg_.sensorSigmaInches;
     if (!(sigma > 0.0_r)) return;
 
+    if (readingCount > kMclMaxReadings) readingCount = kMclMaxReadings;
+
+    // innovation gate
+    //
+    // Decided ONCE against the current estimate, not once per particle
+    const Pose est = estimate();
+    const bool gating = !diverged_ &&
+                        confidenceFrom(spreadAround(est)) >= cfg_.gateMinConfidence &&
+                        (cfg_.gateShortInches > 0.0_r || cfg_.gateLongInches > 0.0_r);
+
+    Particle at{};
+    at.xInches  = est.x;
+    at.yInches  = est.y;
+    at.thetaDeg = est.thetaDeg;
+
+    bool use[kMclMaxReadings] = {};
+    size_t usable = 0;
+
+    for (size_t r = 0; r < readingCount; ++r) {
+        const SensorReading& rd = readings[r];
+        if (!rd.valid) continue;
+        if (rd.mountIndex < 0 || static_cast<size_t>(rd.mountIndex) >= mountCount) continue;
+
+        if (gating) {
+            const real predicted = raycast(at, mounts[rd.mountIndex]);
+            // A negative prediction means the estimate itself is off the
+            // field, so there is nothing to gate against.
+            if (predicted >= 0.0_r) {
+                const real innovation = rd.distanceInches - predicted;
+                const bool tooShort = cfg_.gateShortInches > 0.0_r &&
+                                      innovation < -cfg_.gateShortInches;
+                const bool tooLong  = cfg_.gateLongInches > 0.0_r &&
+                                      innovation >  cfg_.gateLongInches;
+                if (tooShort || tooLong) {
+                    ++gatedReadings_;
+                    continue;
+                }
+            }
+        }
+
+        use[r] = true;
+        ++usable;
+    }
+
+    // Nothing survived, so there is nothing to correct against. 
+    // Leave the cloud alone rather than reweighting on no evidence
+    if (usable == 0) return;
+
     const real mix   = clamp(cfg_.outlierWeight, 0.0_r, 1.0_r);
     // flat component
     const real floorL = mix;
     // Gaussian component
     const real gainL  = 1.0_r - mix;
 
-    bool anyReading = false;
-
     for (int i = 0; i < count_; ++i) {
         real w = p_[i].weight;
 
         for (size_t r = 0; r < readingCount; ++r) {
+            if (!use[r]) continue;
             const SensorReading& rd = readings[r];
-            if (!rd.valid) continue;
-            if (rd.mountIndex < 0 || static_cast<size_t>(rd.mountIndex) >= mountCount) continue;
-            anyReading = true;
 
             const real expected = raycast(p_[i], mounts[rd.mountIndex]);
 
@@ -206,9 +250,6 @@ void Mcl::update(const SensorMount* mounts, size_t mountCount,
 
         p_[i].weight = w;
     }
-
-    // nothing to correct against
-    if (!anyReading) return;
 
     normalise();
 
@@ -302,21 +343,25 @@ Pose Mcl::estimate() const {
     return out;
 }
 
-real Mcl::positionStdDevInches() const {
+real Mcl::spreadAround(const Pose& centre) const {
     if (count_ <= 0) return 0.0_r;
-    const Pose m = estimate();
 
     real sw = 0.0_r, acc = 0.0_r;
     for (int i = 0; i < count_; ++i) {
-        const real dx = p_[i].xInches - m.x;
-        const real dy = p_[i].yInches - m.y;
+        const real dx = p_[i].xInches - centre.x;
+        const real dy = p_[i].yInches - centre.y;
         acc += p_[i].weight * (dx * dx + dy * dy);
         sw  += p_[i].weight;
     }
     if (!(sw > 0.0_r)) return 0.0_r;
 
-    // Radial spread, sqrt of the mean squared distance from the estimate
+    // Radial spread: sqrt of the mean squared distance from the centre,
+    // not a per-axis sigma. Inches.
     return std::sqrt(acc / sw);
+}
+
+real Mcl::positionStdDevInches() const {
+    return spreadAround(estimate());
 }
 
 real Mcl::headingStdDevDeg() const {
@@ -332,11 +377,15 @@ real Mcl::headingStdDevDeg() const {
     return (sw > 0.0_r) ? std::sqrt(acc / sw) : 0.0_r;
 }
 
-real Mcl::confidence() const {
+real Mcl::confidenceFrom(real spreadInches) const {
     if (count_ <= 0 || diverged_) return 0.0_r;
     const real r = cfg_.convergedRadiusInches;
     if (!(r > 0.0_r)) return 0.0_r;
-    return clamp(1.0_r - positionStdDevInches() / r, 0.0_r, 1.0_r);
+    return clamp(1.0_r - spreadInches / r, 0.0_r, 1.0_r);
+}
+
+real Mcl::confidence() const {
+    return confidenceFrom(positionStdDevInches());
 }
 
 } // namespace gflib

@@ -35,6 +35,9 @@ class Rng {
 // inside Mcl, so an instance is roughly kMclMaxParticles * 64 bytes.
 inline constexpr int kMclMaxParticles = 300;
 
+// Same rule for readings: fixed ceiling, no allocation. update() clamps
+inline constexpr size_t kMclMaxReadings = 32;
+
 struct Particle {
     real xInches   = 0.0_r;
     real yInches   = 0.0_r;
@@ -96,6 +99,17 @@ struct MclConfig {
     real rougheningInches = 0.25_r;
     real rougheningDeg    = 0.5_r;
 
+    // Innovation gate: drop a reading that disagrees with the current
+    // estimate by more than this, before it reaches the particles.
+    // Disabled at 0
+    real gateShortInches = 0.0_r;
+    real gateLongInches  = 0.0_r;
+
+    // Gating is suppressed below this confidence. A filter that does not
+    // know where it is must be free to believe readings that contradict an
+    // estimate it has no reason to trust
+    real gateMinConfidence = 0.3_r;
+
     // Position spread at which confidence() reads 0. 
     // Below it, confidence ramps to 1 linearly.
     real convergedRadiusInches = 6.0_r;
@@ -140,6 +154,9 @@ class Mcl {
         // the weights had to be flattened
         bool diverged() const { return diverged_; }
 
+        // Readings dropped by the innovation gate since init(). Monotonic.
+        uint32_t gatedReadings() const { return gatedReadings_; }
+
         // How many times the filter has latched diverged() since init().
         // Monotonic, so a reseed does not erase
         uint32_t divergences() const { return divergences_; }
@@ -152,6 +169,11 @@ class Mcl {
     private:
         void  normalise();
         void  resample();
+
+        // Weighted radial spread about a given centre. Split out so update()
+        // can gate without calling estimate() a second time
+        real  spreadAround(const Pose& centre) const;
+        real  confidenceFrom(real spreadInches) const;
         // Distance from a particle-mounted sensor to the first field wall,
         // or a negative value if the particle is outside the field.
         real raycast(const Particle& p, const SensorMount& m) const;
@@ -163,6 +185,7 @@ class Mcl {
         Rng       rng_{};
         bool      diverged_ = false;
         uint32_t  divergences_ = 0;
+        uint32_t  gatedReadings_ = 0;
         bool      initialised_ = false;
 };
 
