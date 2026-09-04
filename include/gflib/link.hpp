@@ -173,6 +173,8 @@ struct LinkStats {
     uint32_t resyncBytes = 0;
 
     // Gaps in the sequence counter, i.e. frames that never arrived at all.
+    //
+    // Assumes ONE counter per direction, shared by every message type
     uint32_t droppedFrames = 0;
 };
 
@@ -218,9 +220,25 @@ class FrameParser {
 
 // encode
 //
-// Each returns bytes written, or 0 if `cap` was too small. Nothing is
-// partially written on failure. `seq` is the caller's counter
+// One per direction, and it owns the sequence counter. The counter is shared
+// across every message type on that direction
+class FrameWriter {
+    public:
+        size_t poseReport (const PoseReport&  msg, uint8_t* out, size_t cap);
+        size_t brainStatus(const BrainStatus& msg, uint8_t* out, size_t cap);
+        size_t poseSet    (const PoseSet&     msg, uint8_t* out, size_t cap);
 
+        // The number the next frame will carry.
+        uint8_t nextSeq() const { return seq_; }
+
+        // Resets the counter. The receiver sees one gap and carries on.
+        void reset() { seq_ = 0; }
+
+    private:
+        uint8_t seq_ = 0;
+};
+
+// The raw encoders. Each returns bytes written, or 0 if `cap` was too small.
 size_t encodePoseReport(const PoseReport& msg, uint8_t seq, uint8_t* out, size_t cap);
 size_t encodeBrainStatus(const BrainStatus& msg, uint8_t seq, uint8_t* out, size_t cap);
 size_t encodePoseSet(const PoseSet& msg, uint8_t seq, uint8_t* out, size_t cap);

@@ -153,6 +153,25 @@ size_t encodePoseSet(const PoseSet& msg, uint8_t seq, uint8_t* out, size_t cap) 
                  });
 }
 
+// A frame that was not written must not burn a sequence number
+size_t FrameWriter::poseReport(const PoseReport& msg, uint8_t* out, size_t cap) {
+    const size_t n = encodePoseReport(msg, seq_, out, cap);
+    if (n > 0) ++seq_;
+    return n;
+}
+
+size_t FrameWriter::brainStatus(const BrainStatus& msg, uint8_t* out, size_t cap) {
+    const size_t n = encodeBrainStatus(msg, seq_, out, cap);
+    if (n > 0) ++seq_;
+    return n;
+}
+
+size_t FrameWriter::poseSet(const PoseSet& msg, uint8_t* out, size_t cap) {
+    const size_t n = encodePoseSet(msg, seq_, out, cap);
+    if (n > 0) ++seq_;
+    return n;
+}
+
 // decode
 
 namespace {
