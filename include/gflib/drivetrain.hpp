@@ -38,6 +38,9 @@ struct DrivetrainConfig {
     //max tracking wheel distance per tick
     //6 inches at 100Hz is 50ft/s
     real maxTravelInchesPerTick = 6.0_r;
+
+    // Single-pole EMA on the reported velocity.
+    real velocityEmaAlpha = 0.2_r;
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
@@ -62,6 +65,10 @@ class Drivetrain {
 
         Pose getPose() const { return pose_; }
         void setPose(real x, real y, real thetaDeg);
+
+        // Smoothed, field frame. Zero until update() has two timestamps to
+        // work from, and reset by setPose(), commanded jump is not motion
+        Velocity getVelocity() const { return vel_; }
 
         // Blocking. Each returns false if it gave up on the timeout
         bool turnToHeading(real thetaDeg, const ExitConditions& exit);
@@ -117,6 +124,10 @@ class Drivetrain {
         double prevHorizCounts_ = 0.0;
         double prevHeadingDeg_ = 0.0;
         bool calibrated_ = false;
+
+        Velocity vel_{};
+        uint32_t prevUpdateMs_ = 0;
+        bool havePrevUpdate_ = false;
 
         // Carried across a chained handoff to seed the next linear PID
         real chainEntryVolts_ = 0.0_r;

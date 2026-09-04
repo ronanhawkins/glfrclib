@@ -62,7 +62,7 @@ float getF32(const uint8_t* p, size_t& i) {
 
 // Payload sizes. Named so the decoders can reject a frame whose length does
 // not match its type.
-constexpr uint8_t kPoseReportBytes = 4 + 4 + 4 + 4 + 4 + 2;   // 22
+constexpr uint8_t kPoseReportBytes = 4 + 4 + 4 + 4 + 4 + 2 + 12 + 2 + 12;   // 48
 constexpr uint8_t kBrainStatusBytes = 4 + 4 + 4 + 1 + 2;       // 15
 constexpr uint8_t kPoseSetBytes = 4 + 4 + 4 + 4;           // 16
 
@@ -122,6 +122,13 @@ size_t encodePoseReport(const PoseReport& msg, uint8_t seq, uint8_t* out, size_t
                      putF32(p, i, msg.thetaDegrees);
                      putF32(p, i, msg.confidence);
                      putU16(p, i, msg.flags);
+                     putF32(p, i, msg.odomXInches);
+                     putF32(p, i, msg.odomYInches);
+                     putF32(p, i, msg.odomThetaDegrees);
+                     putU16(p, i, msg.bootId);
+                     putF32(p, i, msg.vxInchesPerSec);
+                     putF32(p, i, msg.vyInchesPerSec);
+                     putF32(p, i, msg.omegaDegPerSec);
                  });
 }
 
@@ -168,6 +175,13 @@ bool decodePoseReport(const DecodeResult& r, PoseReport& out) {
     out.thetaDegrees = getF32(r.payload, i);
     out.confidence   = getF32(r.payload, i);
     out.flags        = getU16(r.payload, i);
+    out.odomXInches      = getF32(r.payload, i);
+    out.odomYInches      = getF32(r.payload, i);
+    out.odomThetaDegrees = getF32(r.payload, i);
+    out.bootId           = getU16(r.payload, i);
+    out.vxInchesPerSec   = getF32(r.payload, i);
+    out.vyInchesPerSec   = getF32(r.payload, i);
+    out.omegaDegPerSec   = getF32(r.payload, i);
     return true;
 }
 

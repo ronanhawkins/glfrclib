@@ -53,13 +53,43 @@ void Drivetrain::update() {
     const real dHorizCounts = sanify(prevHorizCounts_, horiz_.getCounts(), cfg_.odom.horizInchesPerCount, cfg_.maxTravelInchesPerTick);
     const real dThetaDeg = sanify(prevHeadingDeg_, imu_.getHeadingDeg(), 1.0_r, cfg_.maxDThetaDegPerTick);
 
+    const Pose prev = pose_;
     pose_ = odomStep(pose_, dVertCounts, dHorizCounts, dThetaDeg, cfg_.odom);
+
+    // Measured interval
+    const uint32_t nowMs = clock_.millisNow();
+    if (!havePrevUpdate_) {
+        prevUpdateMs_ = nowMs;
+        havePrevUpdate_ = true;
+        return;
+    }
+
+    // Unsigned, so it is correct across the 49.7-day millis wrap.
+    const uint32_t elapsedMs = nowMs - prevUpdateMs_;
+    if (elapsedMs == 0) return;
+    prevUpdateMs_ = nowMs;
+
+    const real dtSec = static_cast<real>(elapsedMs) / 1000.0_r;
+    const real ivx = (pose_.x - prev.x) / dtSec;
+    const real ivy = (pose_.y - prev.y) / dtSec;
+    const real iw  = (pose_.thetaDeg - prev.thetaDeg) / dtSec;
+
+    // A rejected tick contributes a zero delta, which is the honest reading:
+    // it decays every channel toward rest rather than holding the last value.
+    const real a = clamp(cfg_.velocityEmaAlpha, 0.0_r, 1.0_r);
+    vel_.vx += a * (ivx - vel_.vx);
+    vel_.vy += a * (ivy - vel_.vy);
+    vel_.omegaDegPerSec += a * (iw - vel_.omegaDegPerSec);
 }
 
 void Drivetrain::setPose(real x, real y, real thetaDeg) {
     pose_.x = x;
     pose_.y = y;
     pose_.thetaDeg = thetaDeg;
+
+    // A commanded jump is not motion.
+    vel_ = Velocity{};
+    havePrevUpdate_ = false;
 
     // Rebase the sensor baselines, or the next update() applies every count
     // accumulated since the last one as motion away from the new pose

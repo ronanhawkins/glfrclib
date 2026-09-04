@@ -28,7 +28,7 @@ inline constexpr uint8_t kLinkSync1 = 0x5A;
 
 // Bump on any payload layout change: a field added, removed, resized or
 // reinterpreted. Renaming a field is free.
-inline constexpr uint8_t kLinkVersion = 1;
+inline constexpr uint8_t kLinkVersion = 2;
 
 inline constexpr size_t kLinkHeaderBytes = 6;
 inline constexpr size_t kLinkCrcBytes    = 2;
@@ -60,6 +60,20 @@ struct PoseReport {
     float confidence = 0.0f;
 
     uint16_t flags = 0;   // PoseFlags
+
+    // Dead reckoning, uncorrected by MCL. Fallback
+    float odomXInches      = 0.0f;
+    float odomYInches      = 0.0f;
+    float odomThetaDegrees = 0.0f;
+
+    // Changes on every ESP32 boot. A brownout mid-match restarts the ESP32, causing incorrect pose
+    uint16_t bootId = 0;
+
+    // Field frame, smoothed. A pose is 15-25 ms old by the time the Brain
+    // acts on it; this is what it extrapolates with.
+    float vxInchesPerSec = 0.0f;
+    float vyInchesPerSec = 0.0f;
+    float omegaDegPerSec = 0.0f;
 };
 
 // V5 -> ESP32, every 10 ms. Tells the ESP32 what the Brain is doing so it can
@@ -186,8 +200,8 @@ class FrameParser {
         size_t buffered() const { return len_ - pending_; }
 
     private:
-        // Two frames' worth: one being parsed, one arriving behind it.
-        uint8_t   buf_[kLinkMaxFrame * 2] = {};
+        // Four frames' worth: one being parsed, three arriving behind it.
+        uint8_t   buf_[kLinkMaxFrame * 4] = {};
         size_t    len_        = 0;
 
         // Bytes of an accepted frame still sitting at the front of buf_

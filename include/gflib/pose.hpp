@@ -11,4 +11,12 @@ struct Pose {
     real thetaDeg = 0.0_r;
 };
 
+// Field frame, same axes as Pose. Inches per second and degrees per second.
+// Field frame rather than body frame so a consumer can extrapolate with x += vx * dt
+struct Velocity {
+    real vx = 0.0_r;
+    real vy = 0.0_r;
+    real omegaDegPerSec = 0.0_r;
+};
+
 } // namespace gflib
