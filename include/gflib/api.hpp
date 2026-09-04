@@ -5,6 +5,8 @@
 #include "gflib/util.hpp"
 #include "gflib/pose.hpp"
 #include "gflib/odom.hpp"
+#include "gflib/posesource.hpp"
+#include "gflib/drivecurve.hpp"
 #include "gflib/pid.hpp"
 #include "gflib/motion.hpp"
 #include "gflib/drivetrain.hpp"

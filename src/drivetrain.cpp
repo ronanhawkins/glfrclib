@@ -4,96 +4,27 @@
 
 namespace gflib {
 
-Drivetrain::Drivetrain(IEncoder& vert, IEncoder& horiz, IImu& imu, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg)
-    : vert_(vert), horiz_(horiz), imu_(imu), drive_(drive), clock_(clock), cfg_(cfg) {}
+Drivetrain::Drivetrain(IPoseSource& source, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg)
+    : source_(source), drive_(drive), clock_(clock), cfg_(cfg) {}
 
-namespace {
+bool Drivetrain::setPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
+    Pose p;
+    p.x = x;
+    p.y = y;
+    p.thetaDeg = thetaDeg;
 
-// Never store a non-finite reading
-void seed(double& prev, double reading) {
-    if (std::isfinite(reading)) prev = reading;
-}
+    const PoseSetResult r = source_.setPose(p);
+    if (r == PoseSetResult::Applied) return true;
+    if (r == PoseSetResult::Rejected) return false;
 
-// The delta to integrate, or 0 if it is outside bounds. scale puts the limit
-// in inches; the IMU passes 1.0 and works in degrees. limit <= 0 drops the
-// bound, not the finite check.
-//
-// The baseline and the reading stay double: encoder counts accumulate, and
-// float holds exact integers only to 2^24. Narrowing happens on the delta,
-// after the subtraction, where the value is one tick of travel.
-real sanify(double& prev, double reading, real scale, real limit) {
-    const real delta = static_cast<real>(reading - prev);
-    const bool ok = std::isfinite(delta) &&
-                    (limit <= 0.0_r || std::fabs(delta * scale) <= limit);
-
-    seed(prev, reading);
-    return ok ? delta : 0.0_r;
-}
-
-}
-
-void Drivetrain::calibrate() {
-    seed(prevVertCounts_, vert_.getCounts());
-    seed(prevHorizCounts_, horiz_.getCounts());
-    seed(prevHeadingDeg_, imu_.getHeadingDeg());
-    calibrated_ = true;
-}
-
-void Drivetrain::update() {
-    // Before calibrate() the baselines are 0, so the first delta would be
-    // the entire boot-time encoder reading. Seed instead of integrating it
-    if (!calibrated_) {
-        calibrate();
-        return;
+    // the pose owner is another processor and has not confirmed yet
+    const uint32_t startMs = clock_.millisNow();
+    while (source_.poseSetPending()) {
+        if (linkElapsedMs(clock_.millisNow(), startMs) >= timeoutMs) return false;
+        clock_.sleepMs(cfg_.loopMs);
+        source_.update();
     }
-
-    // Judged per channel: an IMU glitch should not discard a good tick of
-    // encoder travel.
-    const real dVertCounts = sanify(prevVertCounts_, vert_.getCounts(), cfg_.odom.vertInchesPerCount, cfg_.maxTravelInchesPerTick);
-    const real dHorizCounts = sanify(prevHorizCounts_, horiz_.getCounts(), cfg_.odom.horizInchesPerCount, cfg_.maxTravelInchesPerTick);
-    const real dThetaDeg = sanify(prevHeadingDeg_, imu_.getHeadingDeg(), 1.0_r, cfg_.maxDThetaDegPerTick);
-
-    const Pose prev = pose_;
-    pose_ = odomStep(pose_, dVertCounts, dHorizCounts, dThetaDeg, cfg_.odom);
-
-    // Measured interval
-    const uint32_t nowMs = clock_.millisNow();
-    if (!havePrevUpdate_) {
-        prevUpdateMs_ = nowMs;
-        havePrevUpdate_ = true;
-        return;
-    }
-
-    // Unsigned, so it is correct across the 49.7-day millis wrap.
-    const uint32_t elapsedMs = nowMs - prevUpdateMs_;
-    if (elapsedMs == 0) return;
-    prevUpdateMs_ = nowMs;
-
-    const real dtSec = static_cast<real>(elapsedMs) / 1000.0_r;
-    const real ivx = (pose_.x - prev.x) / dtSec;
-    const real ivy = (pose_.y - prev.y) / dtSec;
-    const real iw  = (pose_.thetaDeg - prev.thetaDeg) / dtSec;
-
-    // A rejected tick contributes a zero delta, which is the honest reading:
-    // it decays every channel toward rest rather than holding the last value.
-    const real a = clamp(cfg_.velocityEmaAlpha, 0.0_r, 1.0_r);
-    vel_.vx += a * (ivx - vel_.vx);
-    vel_.vy += a * (ivy - vel_.vy);
-    vel_.omegaDegPerSec += a * (iw - vel_.omegaDegPerSec);
-}
-
-void Drivetrain::setPose(real x, real y, real thetaDeg) {
-    pose_.x = x;
-    pose_.y = y;
-    pose_.thetaDeg = thetaDeg;
-
-    // A commanded jump is not motion.
-    vel_ = Velocity{};
-    havePrevUpdate_ = false;
-
-    // Rebase the sensor baselines, or the next update() applies every count
-    // accumulated since the last one as motion away from the new pose
-    calibrate();
+    return true;
 }
 
 ExitConditions Drivetrain::withTimeout(const ExitConditions& base, uint32_t timeoutMs) const {
@@ -123,6 +54,14 @@ MotionStatus Drivetrain::runMotion(IMotion& motion) {
         update();
         nowMs = clock_.millisNow();
 
+        // Checked every tick, before the pose is used. A dead link means we
+        // no longer know where the robot is
+        if (!source_.healthy(nowMs)) {
+            drive_.stop();
+            chainEntryVolts_ = 0.0_r;
+            return MotionStatus::PoseUnhealthy;
+        }
+
         // Measured, not nominal. sleepMs(loopMs) yields for AT LEAST loopMs,
         // and update() plus two PIDs are not free, so the real period runs
         // long and jittery on hardware. Feeding the nominal value scales every
@@ -130,7 +69,7 @@ MotionStatus Drivetrain::runMotion(IMotion& motion) {
         const real dtSec = (nowMs - lastMs) / 1000.0_r;
         lastMs = nowMs;
 
-        st = motion.tick(pose_, dtSec, drive_, nowMs);
+        st = motion.tick(source_.getPose(), dtSec, drive_, nowMs);
         if (st != MotionStatus::Running) break;
         clock_.sleepMs(cfg_.loopMs);
     }
@@ -192,9 +131,10 @@ bool Drivetrain::driveDistance(real inches, uint32_t timeoutMs, real chainRadius
     // Project a point `inches` along the current heading and drive to it.
     // forward = (sin t, cos t). Negative distance lands behind us, and
     // MoveConfig::allowReverse then backs into it rather than turning round
-    const real thRad = pose_.thetaDeg * kDegToRad;
-    const real x = pose_.x + std::sin(thRad) * inches;
-    const real y = pose_.y + std::cos(thRad) * inches;
+    const Pose p = source_.getPose();
+    const real thRad = p.thetaDeg * kDegToRad;
+    const real x = p.x + std::sin(thRad) * inches;
+    const real y = p.y + std::cos(thRad) * inches;
 
     return moveToPoint(x, y, timeoutMs, chainRadiusInches);
 }
@@ -207,6 +147,16 @@ void Drivetrain::tank(real leftVolts, real rightVolts) {
 
 void Drivetrain::arcade(real throttleVolts, real turnVolts) {
     tank(throttleVolts + turnVolts, throttleVolts - turnVolts);
+}
+
+void Drivetrain::tankCurved(real leftRaw, real rightRaw) {
+    // Both sides share throttleCurve: on a tank stick each side IS throttle,
+    // and two different curves would make the robot pull under a straight push
+    tank(driveCurve(leftRaw, cfg_.throttleCurve), driveCurve(rightRaw, cfg_.throttleCurve));
+}
+
+void Drivetrain::arcadeCurved(real throttleRaw, real turnRaw) {
+    arcade(driveCurve(throttleRaw, cfg_.throttleCurve), driveCurve(turnRaw, cfg_.turnCurve));
 }
 
 }

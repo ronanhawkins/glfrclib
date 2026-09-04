@@ -3,17 +3,16 @@
 #include <cstdint>
 #include <atomic>
 #include "gflib/hal.hpp"
-#include "gflib/odom.hpp"
+#include "gflib/posesource.hpp"
+#include "gflib/drivecurve.hpp"
 #include "gflib/pid.hpp"
 #include "gflib/motion.hpp"
 #include "gflib/pose.hpp"
 
 namespace gflib {
 
-// Everything robot-specific in one place
+// Everything robot-specific in one place.
 struct DrivetrainConfig {
-    OdomConfig odom;
-
     PidGains lateral;
     PidGains angular;
 
@@ -27,23 +26,21 @@ struct DrivetrainConfig {
     MoveConfig move;
     TurnConfig turn;
 
+    // Driver control shaping. Here rather than in each opcontrol so both
+    // robots answer a stick identically
+    DriveCurveConfig throttleCurve;
+    DriveCurveConfig turnCurve;
+
     // Motion loop period. 10ms gives the 100Hz odometry the tuning assumes;
     // raising it makes derivatives noisier
     uint32_t loopMs = 10;
-
-    //error bounds per tick
-    //max degrees per tick before rejection, at 100Hz this is 9000degrees/s
-    real maxDThetaDegPerTick = 90.0_r;
-
-    //max tracking wheel distance per tick
-    //6 inches at 100Hz is 50ft/s
-    real maxTravelInchesPerTick = 6.0_r;
-
-    // Single-pole EMA on the reported velocity.
-    real velocityEmaAlpha = 0.2_r;
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
+//
+// Consumes a pose to run motions. It does not produce one: that is the
+// IPoseSource's job, and the split is what lets a V5 Brain with no odometry
+// hardware construct a Drivetrain at all.
 //
 // Blocking motions call update() themselves at cfg.loopMs, so autonomous is
 // covered. Driver control must call update() itself, and the rate is now a
@@ -52,23 +49,35 @@ struct DrivetrainConfig {
 // fast direction changes. Call it at 100Hz, and treat 50Hz as the floor
 class Drivetrain {
     public:
-        Drivetrain(IEncoder& vert, IEncoder& horiz, IImu& imu, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg);
+        Drivetrain(IPoseSource& source, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg);
 
-        // Seeds the sensor baselines. Call once, with the robot still,
-        // before anything else. Without it the first update() sees the
-        // whole boot-time encoder reading as one enormous delta
-        void calibrate();
+        // Brings the pose source up. Call once, with the robot still, before
+        // anything else. On odometry this seeds the sensor baselines; on a
+        // link it waits for the first healthy frame
+        bool begin(uint32_t timeoutMs = 0) { return source_.begin(timeoutMs); }
 
-        // One odometry step from the current sensor readings.
-        // Readings failing the plausibility bounds are dropped
-        void update();
+        // Kept for the sensor case, where there is nothing to wait for
+        void calibrate() { source_.begin(0); }
 
-        Pose getPose() const { return pose_; }
-        void setPose(real x, real y, real thetaDeg);
+        // One tick of the pose source
+        void update() { source_.update(); }
 
-        // Smoothed, field frame. Zero until update() has two timestamps to
-        // work from, and reset by setPose(), commanded jump is not motion
-        Velocity getVelocity() const { return vel_; }
+        Pose getPose() const { return source_.getPose(); }
+
+        // Smoothed, field frame
+        Velocity getVelocity() const { return source_.getVelocity(); }
+
+        const IPoseSource& poseSource() const { return source_; }
+        IPoseSource& poseSource() { return source_; }
+
+        // Blocks until the new pose has actually taken, because on a link the
+        // pose belongs to another processor and the write is a request.
+        // 
+        // Returns false if it never took, which is a reason not to drive.
+        //
+        // The default is ~12 report intervals at 100Hz, enough for a PoseSet
+        // and its echo plus a couple of retries. It must NOT be 0
+        bool setPose(real x, real y, real thetaDeg, uint32_t timeoutMs = 250);
 
         // Blocking. Each returns false if it gave up on the timeout
         bool turnToHeading(real thetaDeg, const ExitConditions& exit);
@@ -103,6 +112,11 @@ class Drivetrain {
         void tank(real leftVolts, real rightVolts);
         void arcade(real throttleVolts, real turnVolts);
 
+        // Raw joystick in, shaped and mixed. The curved entry points, so an
+        // opcontrol never has to reimplement the feel
+        void tankCurved(real leftRaw, real rightRaw);
+        void arcadeCurved(real throttleRaw, real turnRaw);
+
         void stop() { drive_.stop(); chainEntryVolts_ = 0.0_r; }
 
         DrivetrainConfig& config() { return cfg_; }
@@ -111,23 +125,10 @@ class Drivetrain {
     private:
         ExitConditions withTimeout(const ExitConditions& base, uint32_t timeoutMs) const;
 
-        IEncoder& vert_;
-        IEncoder& horiz_;
-        IImu& imu_;
+        IPoseSource& source_;
         IDriveOutput& drive_;
         IClock& clock_;
         DrivetrainConfig cfg_;
-
-        Pose pose_{};
-        // double, not real: these accumulate raw encoder counts. See sanify()
-        double prevVertCounts_ = 0.0;
-        double prevHorizCounts_ = 0.0;
-        double prevHeadingDeg_ = 0.0;
-        bool calibrated_ = false;
-
-        Velocity vel_{};
-        uint32_t prevUpdateMs_ = 0;
-        bool havePrevUpdate_ = false;
 
         // Carried across a chained handoff to seed the next linear PID
         real chainEntryVolts_ = 0.0_r;

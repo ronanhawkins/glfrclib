@@ -130,6 +130,7 @@ enum class MotionState : uint8_t {
     Settled = 2,
     TimedOut = 3,
     Cancelled = 4,
+    PoseUnhealthy = 5,
 };
 
 // decode

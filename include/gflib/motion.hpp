@@ -14,6 +14,10 @@ enum class MotionStatus {
     EarlyExit,
     TimedOut,
     Cancelled,
+
+    // The pose source stopped being trustworthy mid-motion: the link died,
+    // went stale, or the far end rebooted.
+    PoseUnhealthy,
 };
 
 class IMotion{

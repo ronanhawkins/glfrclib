@@ -127,13 +127,19 @@ your gains will appear to drift as the battery drains.
 
 ## 3. Wire it up
 
+`Drivetrain` consumes a pose; it does not produce one. What produces it is an
+`IPoseSource`, composed explicitly and handed in.
+
+**On a robot with its own sensors:**
+
 ```cpp
 MyEncoder vertical(7), horizontal(8);
 MyImu     imu(9);
 MyDrive   drive(leftMotors, rightMotors);
 MyClock   clock;
 
-gflib::Drivetrain chassis(vertical, horizontal, imu, drive, clock, makeConfig());
+gflib::OdomPoseSource pose(vertical, horizontal, imu, clock, makeOdomConfig());
+gflib::Drivetrain chassis(pose, drive, clock, makeConfig());
 
 void initialize() {
     imu.calibrate();        // robot must be still
@@ -141,8 +147,23 @@ void initialize() {
 }
 ```
 
-`chassis.calibrate()` is not optional. Without it the first `update()` reads the
-whole boot-time encoder value as one enormous delta.
+**On a Brain that receives its pose over the link** — no encoders, no IMU, so
+there is nothing to build an `OdomPoseSource` from:
+
+```cpp
+gflib::LinkPoseSource pose(serial, clock);
+gflib::Drivetrain chassis(pose, drive, clock, makeConfig());
+
+void initialize() {
+    if (!pose.begin(2000)) { /* the far end is not talking */ }
+}
+```
+
+Everything above `IPoseSource` is identical either way, and `makeConfig()` is
+the same struct on both robots.
+
+`chassis.calibrate()` is not optional on the sensor path. Without it the first
+`update()` reads the whole boot-time encoder value as one enormous delta.
 
 `Drivetrain` is **not thread safe** — keep `update()` and all motion calls on
 one task.
@@ -156,8 +177,9 @@ straight. `getPose()` should read `y ≈ 118`. Off by a constant factor? Scale
 `vertInchesPerCount` by it.
 
 ```cpp
-c.odom.vertInchesPerCount = (M_PI * 2.75) / 36000.0;   // V5 Rotation, 2.75" wheel
-c.odom.vertInchesPerCount = (M_PI * 2.75) / (1024.0 * 4.0);   // 1024 PPR quadrature
+gflib::OdomSourceConfig o;
+o.odom.vertInchesPerCount = (M_PI * 2.75) / 36000.0;   // V5 Rotation, 2.75" wheel
+o.odom.vertInchesPerCount = (M_PI * 2.75) / (1024.0 * 4.0);   // 1024 PPR quadrature
 ```
 
 **Step 2 — the offsets.** Spin exactly 360° clockwise in place:
@@ -191,13 +213,21 @@ against lies.
 Everything robot-specific lives in one struct, in your project:
 
 ```cpp
+// Geometry and the plausibility bounds live with the pose source, so a Brain
+// with no encoders never sees them
+gflib::OdomSourceConfig makeOdomConfig() {
+    gflib::OdomSourceConfig o;
+
+    o.odom.vertInchesPerCount  = ...;   // from step 4
+    o.odom.horizInchesPerCount = ...;
+    o.odom.vertOffsetInches    = ...;
+    o.odom.horizOffsetInches   = ...;
+
+    return o;
+}
+
 gflib::DrivetrainConfig makeConfig() {
     gflib::DrivetrainConfig c;
-
-    c.odom.vertInchesPerCount  = ...;   // from step 4
-    c.odom.horizInchesPerCount = ...;
-    c.odom.vertOffsetInches    = ...;
-    c.odom.horizOffsetInches   = ...;
 
     c.lateral.kP = 0.0;                 // tuned below
     c.lateral.kD = 0.0;
