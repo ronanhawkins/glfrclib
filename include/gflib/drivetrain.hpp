@@ -35,6 +35,9 @@ struct DrivetrainConfig {
     // raising it makes derivatives noisier
     uint32_t loopMs = 10;
 
+    // How often to service the pose source between control ticks
+    uint32_t serviceMs = 0;
+
     // Latency compensation, OFF by default. 0 means every motion sees the
     // pose exactly as the source reports it
     //
@@ -42,6 +45,15 @@ struct DrivetrainConfig {
     // the bench for your link
     uint32_t poseTransitLatencyMs = 0;
     uint32_t poseMaxExtrapMs = 0;
+};
+
+// Called on each service slice while a blocking call is waiting. Exists so a
+// consumer can keep something alive during a motion that would otherwise own
+// the task for its whole duration i.e. the rs485 interface
+class IServiceHook {
+    public:
+        virtual ~IServiceHook() = default;
+        virtual void onService() = 0;
 };
 
 // NOT thread safe. update() and the motion calls must run on one task.
@@ -68,7 +80,11 @@ class Drivetrain {
         // deliberately no calibrate() wrapper -- one that swallowed this
         // bool would be a silent no-op on the Brain, which is the exact trap
         // the split exists to remove
-        bool begin(uint32_t timeoutMs) { return source_.begin(timeoutMs); }
+        //
+        // Serviced, because on a link this is the longest blocking call in
+        // the class and it runs at exactly the moment the far end is waiting
+        // to hear from us for the first time
+        bool begin(uint32_t timeoutMs);
 
         // One tick of the pose source
         void update() { source_.update(); }
@@ -123,6 +139,9 @@ class Drivetrain {
         // Safe from another task. Ends the running motion at the next tick.
         // The flag LATCHES: every later motion fails immediately until
         // clearCancel(), so an estop raised between motions is not swallowed
+        // Set once at init; every later motion, setPose and begin inherits it.
+        void setServiceHook(IServiceHook* hook) { hook_ = hook; }
+
         void cancelMotion() { cancelled_ = true; }
         void clearCancel() { cancelled_ = false; }
         bool isCancelled() const { return cancelled_; }
@@ -144,6 +163,22 @@ class Drivetrain {
     private:
         ExitConditions withTimeout(const ExitConditions& base, uint32_t timeoutMs) const;
 
+        // serviceMs is only meaningful inside a control tick. 
+        bool servicingEnabled() const { return cfg_.serviceMs > 0 && cfg_.serviceMs < cfg_.loopMs; }
+
+        // Waits spanMs measured from baseMs, in serviceMs slices, running
+        // source_.update() and the hook after each. The deadline is absolute
+        // rather than a count of slices: a sleep yields for AT LEAST what it
+        // was asked for, so counting slices would let the control tick drift
+        // out by the accumulated overrun -- the same reason a periodic task
+        // waits until an absolute time instead of delaying after its work.
+        //
+        // Returns false only when guardHealth was asked for and the source
+        // went unhealthy mid-wait; the caller owns stopping the drive
+        bool waitServicing(uint32_t baseMs, uint32_t spanMs, bool guardHealth);
+
+        void serviceTick() { source_.update(); if (hook_) hook_->onService(); }
+
         IPoseSource& source_;
         IDriveOutput& drive_;
         IClock& clock_;
@@ -151,6 +186,8 @@ class Drivetrain {
 
         // Carried across a chained handoff to seed the next linear PID
         real chainEntryVolts_ = 0.0_r;
+
+        IServiceHook* hook_ = nullptr;
 
         std::atomic<bool> cancelled_{false};
 };

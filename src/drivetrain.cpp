@@ -7,6 +7,41 @@ namespace gflib {
 Drivetrain::Drivetrain(IPoseSource& source, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg)
     : source_(source), drive_(drive), clock_(clock), cfg_(cfg) {}
 
+bool Drivetrain::waitServicing(uint32_t baseMs, uint32_t spanMs, bool guardHealth) {
+    if (!servicingEnabled()) {
+        clock_.sleepMs(spanMs);
+        return true;
+    }
+
+    for (;;) {
+        // Unsigned
+        const uint32_t elapsed = linkElapsedMs(clock_.millisNow(), baseMs);
+        if (elapsed >= spanMs) return true;
+
+        // Never overrun the deadline
+        const uint32_t remaining = spanMs - elapsed;
+        clock_.sleepMs(remaining < cfg_.serviceMs ? remaining : cfg_.serviceMs);
+
+        serviceTick();
+
+        // At service rate, not control rate.
+        if (guardHealth && !source_.healthy(clock_.millisNow())) return false;
+    }
+}
+
+bool Drivetrain::begin(uint32_t timeoutMs) {
+    if (!servicingEnabled()) return source_.begin(timeoutMs);
+
+    const uint32_t startMs = clock_.millisNow();
+    for (;;) {
+        if (source_.begin(0)) return true;
+        if (linkElapsedMs(clock_.millisNow(), startMs) >= timeoutMs) return false;
+
+        clock_.sleepMs(cfg_.serviceMs);
+        if (hook_) hook_->onService();
+    }
+}
+
 bool Drivetrain::setPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
     Pose p;
     p.x = x;
@@ -21,7 +56,8 @@ bool Drivetrain::setPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
     const uint32_t startMs = clock_.millisNow();
     while (source_.poseSetPending()) {
         if (linkElapsedMs(clock_.millisNow(), startMs) >= timeoutMs) return false;
-        clock_.sleepMs(cfg_.loopMs);
+        // No health guard: nothing is moving
+        waitServicing(clock_.millisNow(), cfg_.loopMs, false);
         source_.update();
     }
     return true;
@@ -73,7 +109,13 @@ MotionStatus Drivetrain::runMotion(IMotion& motion) {
         // only setting the existing tuning has ever seen
         st = motion.tick(getPoseExtrapolated(nowMs), dtSec, drive_, nowMs);
         if (st != MotionStatus::Running) break;
-        clock_.sleepMs(cfg_.loopMs);
+
+        // nowMs, the next control tick is due one loopMs after
+        if (!waitServicing(nowMs, cfg_.loopMs, true)) {
+            drive_.stop();
+            chainEntryVolts_ = 0.0_r;
+            return MotionStatus::PoseUnhealthy;
+        }
     }
 
     // Cancel always stops, chaining or not
