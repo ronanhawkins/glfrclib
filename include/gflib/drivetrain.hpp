@@ -136,12 +136,13 @@ class Drivetrain {
         // Does not stop the drive on EarlyExit
         MotionStatus runMotion(IMotion& motion);
 
+        // Set once at init, before anything blocking runs, every later
+        // motion, setPose and begin inherits it.
+        void setServiceHook(IServiceHook* hook) { hook_ = hook; }
+
         // Safe from another task. Ends the running motion at the next tick.
         // The flag LATCHES: every later motion fails immediately until
         // clearCancel(), so an estop raised between motions is not swallowed
-        // Set once at init; every later motion, setPose and begin inherits it.
-        void setServiceHook(IServiceHook* hook) { hook_ = hook; }
-
         void cancelMotion() { cancelled_ = true; }
         void clearCancel() { cancelled_ = false; }
         bool isCancelled() const { return cancelled_; }

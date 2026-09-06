@@ -7,24 +7,30 @@ namespace gflib {
 Drivetrain::Drivetrain(IPoseSource& source, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg)
     : source_(source), drive_(drive), clock_(clock), cfg_(cfg) {}
 
+// Waits until baseMs + spanMs.
 bool Drivetrain::waitServicing(uint32_t baseMs, uint32_t spanMs, bool guardHealth) {
-    if (!servicingEnabled()) {
-        clock_.sleepMs(spanMs);
-        return true;
-    }
-
     for (;;) {
-        // Unsigned
+        // Unsigned, so this stays correct across the millis wrap
         const uint32_t elapsed = linkElapsedMs(clock_.millisNow(), baseMs);
         if (elapsed >= spanMs) return true;
 
-        // Never overrun the deadline
         const uint32_t remaining = spanMs - elapsed;
+
+        if (!servicingEnabled()) {
+            // Nothing to interleave, so go straight to the deadline.
+            // Still measured from baseMs
+            clock_.sleepMs(remaining);
+            return true;
+        }
+
+        // Never overrun the deadline, a full slice at the end would push the
+        // control tick late by up to serviceMs every single time
         clock_.sleepMs(remaining < cfg_.serviceMs ? remaining : cfg_.serviceMs);
 
         serviceTick();
 
-        // At service rate, not control rate.
+        // At service rate, not control rate. A link that has died should
+        // abort inside a slice rather than finishing out the tick
         if (guardHealth && !source_.healthy(clock_.millisNow())) return false;
     }
 }
@@ -38,7 +44,8 @@ bool Drivetrain::begin(uint32_t timeoutMs) {
         if (linkElapsedMs(clock_.millisNow(), startMs) >= timeoutMs) return false;
 
         clock_.sleepMs(cfg_.serviceMs);
-        if (hook_) hook_->onService();
+
+        serviceTick();
     }
 }
 
