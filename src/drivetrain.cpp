@@ -61,6 +61,17 @@ bool Drivetrain::begin(uint32_t timeoutMs) {
     }
 }
 
+bool Drivetrain::latchPoseSetFailure() {
+    faulted_ = true;
+
+    faultStatus_ = MotionStatus::PoseUnhealthy;
+
+    // Deliberately not incremented. A setPose failure lands at whatever the
+    // count already is, so 0 reads as "before the routine's first motion"
+    faultedAtMotion_ = motionsAttempted_;
+    return false;
+}
+
 bool Drivetrain::setPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
     Pose p;
     p.x = x;
@@ -69,12 +80,12 @@ bool Drivetrain::setPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
 
     const PoseSetResult r = source_.setPose(p);
     if (r == PoseSetResult::Applied) return true;
-    if (r == PoseSetResult::Rejected) return false;
+    if (r == PoseSetResult::Rejected) return latchPoseSetFailure();
 
     // the pose owner is another processor and has not confirmed yet
     const uint32_t startMs = clock_.millisNow();
     while (source_.poseSetPending()) {
-        if (linkElapsedMs(clock_.millisNow(), startMs) >= timeoutMs) return false;
+        if (linkElapsedMs(clock_.millisNow(), startMs) >= timeoutMs) return latchPoseSetFailure();
         // No health guard: nothing is moving
         waitServicing(clock_.millisNow(), cfg_.loopMs, false);
         source_.update();
@@ -89,6 +100,34 @@ ExitConditions Drivetrain::withTimeout(const ExitConditions& base, uint32_t time
 }
 
 MotionStatus Drivetrain::runMotion(IMotion& motion) {
+    // Before anything else, and without running the motion. A routine that
+    // has already lost the pose must not keep driving toward coordinates
+    // derived from it. Stopping here as well, because a chained handoff can
+    // have left the motors powered
+    if (faulted_) {
+        drive_.stop();
+        chainEntryVolts_ = 0.0_r;
+        return faultStatus_;
+    }
+
+    // Counted here rather than on success, so the index names the call the
+    // routine actually made
+    ++motionsAttempted_;
+
+    const MotionStatus st = runMotionUnlatched(motion);
+
+    // EarlyExit is a chained handoff, not a failure: the robot is still
+    // moving and the next motion is expected to pick it up.
+    if (st != MotionStatus::Settled && st != MotionStatus::EarlyExit &&
+        st != MotionStatus::Cancelled) {
+        faulted_ = true;
+        faultStatus_ = st;
+        faultedAtMotion_ = motionsAttempted_;
+    }
+    return st;
+}
+
+MotionStatus Drivetrain::runMotionUnlatched(IMotion& motion) {
     // Not cleared here. A cancel raised between motions would otherwise be
     // wiped by the next one, which is the wrong way for an estop to fail
     if (cancelled_) {

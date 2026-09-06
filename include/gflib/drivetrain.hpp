@@ -163,6 +163,24 @@ class Drivetrain {
         // at a fixed rate -- the drift this mechanism exists to remove
         void setServiceHook(IServiceHook* hook) { hook_ = hook; }
 
+        // A motion that ended in anything but Settled or EarlyExit latches
+        // here, and every later motion returns that same status without
+        // running. clearFault() releases it and resets the motion counter.
+        bool faulted() const { return faulted_; }
+
+        // Meaningless unless faulted()
+        MotionStatus faultStatus() const { return faultStatus_; }
+
+        // 1-based index of the motion that faulted
+        uint32_t faultedAtMotion() const { return faultedAtMotion_; }
+
+        void clearFault() {
+            faulted_ = false;
+            faultStatus_ = MotionStatus::Settled;
+            faultedAtMotion_ = 0;
+            motionsAttempted_ = 0;
+        }
+
         // Safe from another task. Ends the running motion at the next tick.
         // The flag LATCHES: every later motion fails immediately until
         // clearCancel(), so an estop raised between motions is not swallowed
@@ -186,6 +204,12 @@ class Drivetrain {
 
     private:
         ExitConditions withTimeout(const ExitConditions& base, uint32_t timeoutMs) const;
+
+        MotionStatus runMotionUnlatched(IMotion& motion);
+
+        // The pod never acknowledged the reseed, so we do not know where the
+        // robot is. Always returns false, so callers can `return latchPoseSetFailure();`
+        bool latchPoseSetFailure();
 
         // serviceMs is only meaningful inside a control tick. 
         bool servicingEnabled() const { return cfg_.serviceMs > 0 && cfg_.serviceMs < cfg_.loopMs; }
@@ -212,6 +236,11 @@ class Drivetrain {
         real chainEntryVolts_ = 0.0_r;
 
         IServiceHook* hook_ = nullptr;
+
+        bool faulted_ = false;
+        MotionStatus faultStatus_ = MotionStatus::Settled;
+        uint32_t faultedAtMotion_ = 0;
+        uint32_t motionsAttempted_ = 0;
 
         std::atomic<bool> cancelled_{false};
 };
