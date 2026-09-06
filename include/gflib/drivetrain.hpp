@@ -137,7 +137,30 @@ class Drivetrain {
         MotionStatus runMotion(IMotion& motion);
 
         // Set once at init, before anything blocking runs, every later
-        // motion, setPose and begin inherits it.
+        // motion, setPose and begin inherits it. nullptr clears it. hook_ is
+        // a plain pointer, not an atomic, so swapping it while a motion runs
+        // races the loop reading it.
+        //
+        // WHY THIS EXISTS: servicing the pose source and running the control
+        // law are different rates. The V5 Brain has to answer the sensor pod
+        // within a couple of milliseconds, while its PIDs want the 10ms tick
+        // the tuning was built on. Without a hook the only way to get the
+        // first is to raise the second, and that corrupts every derivative.
+        //
+        // The hook runs ON THE MOTION TASK, inside the sleep between control
+        // ticks. So it must not block -- time spent here is taken from the
+        // control tick that follows, not from idle time -- and it must not
+        // call back into Drivetrain. Nothing in this class is reentrant, and
+        // this is the rule a consumer breaks first: the obvious thing to put
+        // in a hook is "send the status, and while I am here check whether
+        // the motion should abort". A hook that starts a motion or touches
+        // the pose source corrupts the loop that called it. Ask that from the
+        // task that called runMotion, once it has returned.
+        //
+        // cfg.serviceMs should divide cfg.loopMs. When it does not, the last
+        // slice before each control tick is short by the remainder, so the
+        // service cadence beats against the control tick instead of sitting
+        // at a fixed rate -- the drift this mechanism exists to remove
         void setServiceHook(IServiceHook* hook) { hook_ = hook; }
 
         // Safe from another task. Ends the running motion at the next tick.

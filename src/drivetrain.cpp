@@ -7,12 +7,24 @@ namespace gflib {
 Drivetrain::Drivetrain(IPoseSource& source, IDriveOutput& drive, IClock& clock, const DrivetrainConfig& cfg)
     : source_(source), drive_(drive), clock_(clock), cfg_(cfg) {}
 
-// Waits until baseMs + spanMs.
+// Waits until baseMs + spanMs. Absolute in every case, so the tick's own work
+// comes out of the wait rather than being added to it: dtSec is measured, so a
+// period of loopMs + work would feed straight into every derivative and slew
+// step. Servicing must not be the thing that changes the control rate.
 bool Drivetrain::waitServicing(uint32_t baseMs, uint32_t spanMs, bool guardHealth) {
     for (;;) {
         // Unsigned, so this stays correct across the millis wrap
         const uint32_t elapsed = linkElapsedMs(clock_.millisNow(), baseMs);
-        if (elapsed >= spanMs) return true;
+        if (elapsed >= spanMs) {
+            // Overrun: the deadline has already passed, so there is nothing
+            // to wait for. Yield anyway. A motion loop slower than loopMs
+            // would otherwise never release the CPU, and the tasks it starves
+            // are the ones most likely to be relieving the pressure -- the
+            // overrun denies CPU to the work that would end it. This moves no
+            // deadline; it is a scheduling courtesy, not a timing rule
+            clock_.sleepMs(0);
+            return true;
+        }
 
         const uint32_t remaining = spanMs - elapsed;
 
