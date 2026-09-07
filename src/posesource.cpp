@@ -35,6 +35,10 @@ bool OdomPoseSource::begin(uint32_t) {
     seed(prevHorizCounts_, horiz_.getCounts());
     seed(prevHeadingDeg_, imu_.getHeadingDeg());
     seeded_ = true;
+
+    // Baselines have just been rebased, so the previous tick's deltas describe
+    // motion away from a pose that no longer applies.
+    lastDeltas_ = IntegratedDeltas{};
     return true;
 }
 
@@ -49,6 +53,10 @@ void OdomPoseSource::update() {
     const real dVertCounts = sanify(prevVertCounts_, vert_.getCounts(), cfg_.odom.vertInchesPerCount, cfg_.maxTravelInchesPerTick);
     const real dHorizCounts = sanify(prevHorizCounts_, horiz_.getCounts(), cfg_.odom.horizInchesPerCount, cfg_.maxTravelInchesPerTick);
     const real dThetaDeg = sanify(prevHeadingDeg_, imu_.getHeadingDeg(), 1.0_r, cfg_.maxDThetaDegPerTick);
+
+    // Published before odomStep, so anything reading them is looking at the
+    // same three numbers this source is about to integrate.
+    lastDeltas_ = IntegratedDeltas{dVertCounts, dHorizCounts, dThetaDeg};
 
     const Pose prev = pose_;
     pose_ = odomStep(pose_, dVertCounts, dHorizCounts, dThetaDeg, cfg_.odom);

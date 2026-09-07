@@ -92,6 +92,19 @@ class OdomPoseSource : public IPoseSource {
         // work from, and reset by setPose(), a commanded jump is not motion
         Velocity getVelocity() const override { return vel_; }
 
+        // What the last update() ACTUALLY integrated, after the plausibility
+        // bounds were applied.
+        struct IntegratedDeltas {
+            real vertCounts  = 0.0_r;
+            real horizCounts = 0.0_r;
+            real thetaDeg    = 0.0_r;
+        };
+
+        // For a filter that must step the same motion this source stepped
+        //
+        // It must read them here rather than difference the encoders itself.
+        const IntegratedDeltas& lastDeltas() const { return lastDeltas_; }
+
         PoseSetResult setPose(const Pose& p) override;
         bool poseSetPending() const override { return false; }
 
@@ -122,6 +135,8 @@ class OdomPoseSource : public IPoseSource {
         Velocity vel_{};
         uint32_t prevUpdateMs_ = 0;
         bool havePrevUpdate_ = false;
+
+        IntegratedDeltas lastDeltas_{};
 };
 
 struct LinkPoseSourceConfig {
