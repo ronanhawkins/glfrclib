@@ -193,10 +193,12 @@ Pose LinkPoseSource::getPose() const {
 }
 
 Velocity LinkPoseSource::getVelocity() const {
-    // Not switched by useDeadReckoning: PoseReport carries no odom velocity.
-    // In that mode extrapolatePose therefore pairs a dead-reckoned position
-    // with this corrected velocity, which is the one place the MCL estimate
-    // still reaches a caller that asked not to use it
+    // Not switched by useDeadReckoning: PoseReport carries one velocity and
+    // no odom variant, so there is nothing to choose between.
+    //
+    // Whether it is corrected is the far end's business. If a pod ever
+    // derives it from the MCL output, this becomes the one path by which
+    // that estimate still reaches a caller who asked not to use it
     Velocity v;
     v.vx = last_.vxInchesPerSec;
     v.vy = last_.vyInchesPerSec;
