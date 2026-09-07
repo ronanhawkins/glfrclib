@@ -165,7 +165,11 @@ class Drivetrain {
 
         // A motion that ended in anything but Settled or EarlyExit latches
         // here, and every later motion returns that same status without
-        // running. clearFault() releases it and resets the motion counter.
+        // running. setPose refuses as well.
+        //
+        // clearFault() is the only reset. It releases the latch and zeros the
+        // motion counter, so a routine must call it before its first motion
+        // or the indices carry on from the previous routine
         bool faulted() const { return faulted_; }
 
         // Meaningless unless faulted()

@@ -73,6 +73,10 @@ bool Drivetrain::latchPoseSetFailure() {
 }
 
 bool Drivetrain::setPose(real x, real y, real thetaDeg, uint32_t timeoutMs) {
+    // A latched fault is not always a pose fault, TimedOut means the robot is
+    // stalled against something, and re-seeding coordinates does not unstick it
+    if (faulted_) return false;
+
     Pose p;
     p.x = x;
     p.y = y;
