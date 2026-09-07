@@ -136,6 +136,17 @@ struct LinkPoseSourceConfig {
     // A PoseSet is fire-and-forget on the wire, so retry until the echo
     // arrives rather than hoping the one frame survived
     uint32_t poseSetRetryMs = 20;
+
+    // Read the report's dead-reckoning triplet instead of the corrected pose,
+    // and stop treating cloud agreement as a health signal. For a field with
+    // nothing to range against, where MCL cannot converge and minConfidence
+    // would otherwise refuse every motion.
+    //
+    // Purely a decision about which of the two poses on the wire to believe.
+    // The far end keeps running MCL and keeps sending both; nothing about
+    // this reaches it. A pod reboot still latches bootIdChanged_, because a
+    // restart destroys the odom baselines just as thoroughly as the cloud
+    bool useDeadReckoning = false;
 };
 
 // The pose arrives over RS-485 from the processor that owns the sensors.

@@ -182,10 +182,21 @@ bool LinkPoseSource::begin(uint32_t timeoutMs) {
 
 Pose LinkPoseSource::getPose() const {
     // not extrapolated by ageMs
+    if (cfg_.useDeadReckoning) {
+        Pose p;
+        p.x        = last_.odomXInches;
+        p.y        = last_.odomYInches;
+        p.thetaDeg = last_.odomThetaDegrees;
+        return p;
+    }
     return poseFromReport(last_);
 }
 
 Velocity LinkPoseSource::getVelocity() const {
+    // Not switched by useDeadReckoning: PoseReport carries no odom velocity.
+    // In that mode extrapolatePose therefore pairs a dead-reckoned position
+    // with this corrected velocity, which is the one place the MCL estimate
+    // still reaches a caller that asked not to use it
     Velocity v;
     v.vx = last_.vxInchesPerSec;
     v.vy = last_.vyInchesPerSec;
@@ -220,7 +231,15 @@ PoseSetResult LinkPoseSource::setPose(const Pose& p) {
 }
 
 real LinkPoseSource::confidence() const {
-    return haveReport_ ? static_cast<real>(last_.confidence) : 0.0_r;
+    // No report is no pose, dead reckoning or not
+    if (!haveReport_) return 0.0_r;
+
+    // Cloud agreement says nothing about a pose the cloud did not produce.
+    // Reported as-is it would gate every motion on an MCL that has nothing
+    // to range against, which is the situation this mode exists for
+    if (cfg_.useDeadReckoning) return 1.0_r;
+
+    return static_cast<real>(last_.confidence);
 }
 
 uint32_t LinkPoseSource::ageMs(uint32_t nowMs) const {
