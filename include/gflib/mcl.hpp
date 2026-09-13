@@ -84,6 +84,14 @@ struct MclConfig {
     real headingNoisePerInch = 0.02_r;
     real headingNoisePerDeg  = 0.02_r;
 
+    // Diffusion applied every predict tick regardless of motion. Without it a
+    // stationary cloud stops spreading while readings keep sharpening it.
+    real transNoiseFloorInches = 0.05_r;
+
+    // Smaller than the translation floor: range-only observations constrain
+    // heading far more weakly than position, so spread here is slower to return.
+    real headingNoiseFloorDeg  = 0.01_r;
+
     // Distance sensor model.
     real sensorSigmaInches   = 1.5_r;
     real sensorMaxRangeInches = 100.0_r;
@@ -129,6 +137,12 @@ class Mcl {
 
         // Measurement update. Reweights against expected wall distances.
         // Resamples internally when the cloud has degenerated.
+        // For a caller that already holds this tick's estimate and confidence;
+        // saves three cloud traversals. They MUST come from this same tick.
+        void update(const SensorMount* mounts, size_t mountCount,
+                    const SensorReading* readings, size_t readingCount,
+                    const Pose& est, real estConfidence);
+
         void update(const SensorMount* mounts, size_t mountCount,
                     const SensorReading* readings, size_t readingCount);
 
@@ -138,6 +152,9 @@ class Mcl {
 
         // 0 to 1 from position spread against convergedRadiusInches.
         real confidence() const;
+
+        // confidence() without recomputing estimate(). Pass this tick's pose.
+        real confidenceAt(const Pose& centre) const;
 
         // Weighted position standard deviation, inches, and heading standard
         // deviation, degrees. raw num used for confidence()

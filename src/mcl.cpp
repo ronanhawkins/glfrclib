@@ -107,8 +107,12 @@ void Mcl::predict(real dVertCounts, real dHorizCounts, real dThetaDeg,
     const real transInches = std::hypot(dVertInches, dHorizInches);
     const real rotDeg = std::fabs(dThetaDeg);
 
-    const real sigmaTrans = cfg_.transNoisePerInch * transInches + cfg_.transNoisePerDeg * rotDeg;
-    const real sigmaRot = cfg_.headingNoisePerInch * transInches + cfg_.headingNoisePerDeg * rotDeg;
+    // The floors keep the cloud breathing when the robot is still; a spread
+    // that small is not evidence the estimate is right.
+    const real sigmaTrans = cfg_.transNoisePerInch * transInches +
+                            cfg_.transNoisePerDeg * rotDeg + cfg_.transNoiseFloorInches;
+    const real sigmaRot = cfg_.headingNoisePerInch * transInches +
+                          cfg_.headingNoisePerDeg * rotDeg + cfg_.headingNoiseFloorDeg;
 
     // Noise is generated in inches and converted back to counts: the two
     // pods can have different scales.
@@ -169,6 +173,14 @@ real Mcl::raycast(const Particle& p, const SensorMount& m) const {
 
 void Mcl::update(const SensorMount* mounts, size_t mountCount,
                  const SensorReading* readings, size_t readingCount) {
+    if (!initialised_) return;
+    const Pose est = estimate();
+    update(mounts, mountCount, readings, readingCount, est, confidenceAt(est));
+}
+
+void Mcl::update(const SensorMount* mounts, size_t mountCount,
+                 const SensorReading* readings, size_t readingCount,
+                 const Pose& est, real estConfidence) {
     if (!initialised_ || mounts == nullptr || readings == nullptr) return;
 
     const real sigma = cfg_.sensorSigmaInches;
@@ -179,9 +191,8 @@ void Mcl::update(const SensorMount* mounts, size_t mountCount,
     // innovation gate
     //
     // Decided ONCE against the current estimate, not once per particle
-    const Pose est = estimate();
     const bool gating = !diverged_ &&
-                        confidenceFrom(spreadAround(est)) >= cfg_.gateMinConfidence &&
+                        estConfidence >= cfg_.gateMinConfidence &&
                         (cfg_.gateShortInches > 0.0_r || cfg_.gateLongInches > 0.0_r);
 
     Particle at{};
@@ -386,6 +397,10 @@ real Mcl::confidenceFrom(real spreadInches) const {
 
 real Mcl::confidence() const {
     return confidenceFrom(positionStdDevInches());
+}
+
+real Mcl::confidenceAt(const Pose& centre) const {
+    return confidenceFrom(spreadAround(centre));
 }
 
 } // namespace gflib
